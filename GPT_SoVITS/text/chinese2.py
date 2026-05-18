@@ -17,11 +17,16 @@ pinyin_to_symbol_map = {
     for line in open(os.path.join(current_file_path, "opencpop-strict.txt")).readlines()
 }
 
-import jieba_fast
-import logging
-
-jieba_fast.setLogLevel(logging.CRITICAL)
-import jieba_fast.posseg as psg
+try:
+    import jieba_fast
+    import logging
+    jieba_fast.setLogLevel(logging.CRITICAL)
+    import jieba_fast.posseg as psg
+except ModuleNotFoundError:
+    import jieba
+    import logging
+    jieba.setLogLevel(logging.CRITICAL)
+    import jieba.posseg as psg
 
 # is_g2pw_str = os.environ.get("is_g2pw", "True")##默认开启
 # is_g2pw = False#True if is_g2pw_str.lower() == 'true' else False
@@ -180,15 +185,10 @@ def _merge_erhua(initials: list[str], finals: list[str], word: str, pos: str) ->
 def _g2p(segments):
     phones_list = []
     word2ph = []
-    g2pw_batch_results = []
-    g2pw_batch_cursor = 0
-    processed_segments = [re.sub("[a-zA-Z]+", "", seg) for seg in segments]
-    if is_g2pw:
-        batch_inputs = [seg for seg in processed_segments if seg]
-        g2pw_batch_results = g2pw._g2pw(batch_inputs) if batch_inputs else []
-
-    for seg in processed_segments:
+    for seg in segments:
         pinyins = []
+        # Replace all English words in the sentence
+        seg = re.sub("[a-zA-Z]+", "", seg)
         seg_cut = psg.lcut(seg)
         seg_cut = tone_modifier.pre_merge_for_modify(seg_cut)
         initials = []
@@ -209,10 +209,8 @@ def _g2p(segments):
             finals = sum(finals, [])
             print("pypinyin结果", initials, finals)
         else:
-            # g2pw采用整句推理（批量推理，逐句取结果）
-            if seg:
-                pinyins = g2pw_batch_results[g2pw_batch_cursor]
-                g2pw_batch_cursor += 1
+            # g2pw采用整句推理
+            pinyins = g2pw.lazy_pinyin(seg, neutral_tone_with_five=True, style=Style.TONE3)
 
             pre_word_length = 0
             for word, pos in seg_cut:

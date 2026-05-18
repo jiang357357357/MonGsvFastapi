@@ -1,5 +1,6 @@
 # modified from https://github.com/feng-yufei/shared_debugging_code/blob/main/train_t2s.py
 import os
+import pathlib
 
 if "_CUDA_VISIBLE_DEVICES" in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["_CUDA_VISIBLE_DEVICES"]
@@ -24,6 +25,13 @@ from collections import OrderedDict
 
 from AR.utils import get_newest_ckpt
 from process_ckpt import my_save
+
+
+def get_visible_gpu_count() -> int:
+    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if not cuda_visible_devices:
+        return torch.cuda.device_count() if torch.cuda.is_available() else 0
+    return len([item for item in cuda_visible_devices.split(",") if item.strip()])
 
 
 class my_model_ckpt(ModelCheckpoint):
@@ -83,6 +91,14 @@ class my_model_ckpt(ModelCheckpoint):
 
 
 def main(args):
+    if hasattr(torch.serialization, "add_safe_globals"):
+        safe_globals = [pathlib.Path]
+        if hasattr(pathlib, "WindowsPath"):
+            safe_globals.append(pathlib.WindowsPath)
+        if hasattr(pathlib, "PosixPath"):
+            safe_globals.append(pathlib.PosixPath)
+        torch.serialization.add_safe_globals(safe_globals)
+
     config = load_yaml_config(args.config_file)
 
     output_dir = Path(config["output_dir"])
@@ -106,20 +122,24 @@ def main(args):
         dirpath=ckpt_dir,
     )
     logger = TensorBoardLogger(name=output_dir.stem, save_dir=output_dir)
-    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "127.0.0.1")
     os.environ["USE_LIBUV"] = "0"
+    gpu_count = get_visible_gpu_count()
+    use_distributed = torch.cuda.is_available() and gpu_count > 1
     trainer: Trainer = Trainer(
         max_epochs=config["train"]["epochs"],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         # val_check_interval=9999999999999999999999,###不要验证
         # check_val_every_n_epoch=None,
         limit_val_batches=0,
-        devices=-1 if torch.cuda.is_available() else 1,
+        devices=gpu_count if use_distributed else 1,
         benchmark=False,
         fast_dev_run=False,
-        strategy=DDPStrategy(process_group_backend="nccl" if platform.system() != "Windows" else "gloo")
-        if torch.cuda.is_available()
-        else "auto",
+        strategy=(
+            DDPStrategy(process_group_backend="nccl" if platform.system() != "Windows" else "gloo")
+            if use_distributed
+            else "auto"
+        ),
         precision=config["train"]["precision"],
         logger=logger,
         num_sanity_val_steps=0,

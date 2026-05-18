@@ -3,6 +3,9 @@
 import sys
 import os
 
+# 禁用 torchcodec，使用旧的音频加载方式
+os.environ["TORCHAUDIO_USE_BACKEND_DISPATCHER"] = "0"
+
 inp_text = os.environ.get("inp_text")
 inp_wav_dir = os.environ.get("inp_wav_dir")
 exp_name = os.environ.get("exp_name")

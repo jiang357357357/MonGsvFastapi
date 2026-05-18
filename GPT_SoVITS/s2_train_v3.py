@@ -55,8 +55,17 @@ def main():
         n_gpus = torch.cuda.device_count()
     else:
         n_gpus = 1
-    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(randint(20000, 55555))
+
+    if n_gpus <= 1:
+        run(
+            0,
+            n_gpus,
+            hps,
+            False,
+        )
+        return
 
     mp.spawn(
         run,
@@ -64,11 +73,12 @@ def main():
         args=(
             n_gpus,
             hps,
+            True,
         ),
     )
 
 
-def run(rank, n_gpus, hps):
+def run(rank, n_gpus, hps, use_distributed=True):
     global global_step
     if rank == 0:
         logger = utils.get_logger(hps.data.exp_dir)
@@ -77,12 +87,13 @@ def run(rank, n_gpus, hps):
         writer = SummaryWriter(log_dir=hps.s2_ckpt_dir)
         writer_eval = SummaryWriter(log_dir=os.path.join(hps.s2_ckpt_dir, "eval"))
 
-    dist.init_process_group(
-        backend="gloo" if os.name == "nt" or not torch.cuda.is_available() else "nccl",
-        init_method="env://?use_libuv=False",
-        world_size=n_gpus,
-        rank=rank,
-    )
+    if use_distributed:
+        dist.init_process_group(
+            backend="gloo" if os.name == "nt" or not torch.cuda.is_available() else "nccl",
+            init_method="env://?use_libuv=False",
+            world_size=n_gpus,
+            rank=rank,
+        )
     torch.manual_seed(hps.train.seed)
     if torch.cuda.is_available():
         torch.cuda.set_device(rank)
@@ -116,15 +127,16 @@ def run(rank, n_gpus, hps):
         shuffle=True,
     )
     collate_fn = TextAudioSpeakerCollate()
+    single_process_mode = not use_distributed
     train_loader = DataLoader(
         train_dataset,
-        num_workers=5,
+        num_workers=0 if single_process_mode else 5,
         shuffle=False,
         pin_memory=True,
         collate_fn=collate_fn,
         batch_sampler=train_sampler,
-        persistent_workers=True,
-        prefetch_factor=3,
+        persistent_workers=False if single_process_mode else True,
+        prefetch_factor=None if single_process_mode else 3,
     )
     # if rank == 0:
     #     eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps.data, val=True)
@@ -165,11 +177,11 @@ def run(rank, n_gpus, hps):
     #     betas=hps.train.betas,
     #     eps=hps.train.eps,
     # )
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and use_distributed:
         net_g = DDP(net_g, device_ids=[rank], find_unused_parameters=True)
         # net_d = DDP(net_d, device_ids=[rank], find_unused_parameters=True)
     else:
-        net_g = net_g.to(device)
+        net_g = net_g.cuda(rank) if torch.cuda.is_available() else net_g.to(device)
         # net_d = net_d.to(device)
 
     try:  # 如果能加载自动resume

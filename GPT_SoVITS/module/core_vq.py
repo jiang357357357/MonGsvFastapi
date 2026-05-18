@@ -158,9 +158,19 @@ class EuclideanCodebook(nn.Module):
         if self.inited:
             return
 
-        if dist.is_available() and dist.is_initialized():
+        distributed_ready = dist.is_available() and dist.is_initialized()
+
+        if distributed_ready:
             # [B * T * world_size, D]
             data = SyncFunction.apply(data)
+
+        if not distributed_ready:
+            embed, cluster_size = kmeans(data, self.codebook_size, self.kmeans_iters)
+            self.embed.data.copy_(embed)
+            self.embed_avg.data.copy_(embed.clone())
+            self.cluster_size.data.copy_(cluster_size)
+            self.inited.data.copy_(torch.Tensor([True]))
+            return
 
         if dist.get_rank() == 0:
             embed, cluster_size = kmeans(data, self.codebook_size, self.kmeans_iters)
@@ -189,9 +199,16 @@ class EuclideanCodebook(nn.Module):
         if not torch.any(expired_codes):
             return
 
-        if is_distributed():
+        distributed_ready = is_distributed() and dist.is_available() and dist.is_initialized()
+
+        if distributed_ready:
             # [B * T * world_size, D]
             batch_samples = SyncFunction.apply(batch_samples)
+
+        if not distributed_ready:
+            new_embeds = sample_vectors(batch_samples, expired_codes.sum())
+            self.embed.data[expired_codes] = new_embeds
+            return
 
         if dist.get_rank() == 0:
             new_embeds = sample_vectors(batch_samples, expired_codes.sum())

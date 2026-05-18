@@ -1,0 +1,182 @@
+# ============================================================
+# GSV .monconfig
+# GPT-SoVITS 语音合成工具配置
+# ============================================================
+
+[service]
+NAME=GSV
+VERSION=1.0.0
+DESCRIPTION=GPT-SoVITS Voice Synthesis Tool
+
+[server]
+HOST=0.0.0.0
+PORT=40302
+BASE_URL=http://0.0.0.0:40302
+RELOAD=false
+
+[frontend]
+HOST=0.0.0.0
+PORT=40031
+BASE_URL=http://0.0.0.0:40031
+
+[paths]
+MODELS_DIR=Env/Models
+OUTPUT_DIR=Data/Output
+TEMP_DIR=Data/Temp
+
+[log]
+LEVEL=info
+FILE=Data/Logs/Text/GSV.log
+PLAIN_FILE=Data/Logs/Text/GSV_plain.log
+
+[process]
+NAME=GSV-Service
+SCRIPT_START=scripts/start_gsv.sh
+SCRIPT_STOP=scripts/stop_gsv.sh
+
+[model]
+DEFAULT_MODEL=GPT-SoVITS
+PRETRAINED_MODELS_DIR=Env/Models/pretrained_models
+UVR5_WEIGHTS_DIR=Env/Models/uvr5_weights
+
+[audio]
+SAMPLE_RATE=32000
+FORMAT=wav
+BIT_DEPTH=16
+
+[gpu]
+ENABLED=true
+DEVICE=cuda
+HALF_PRECISION=true
+
+# ============================================================
+# GsvBack Django 后端服务配置（从 GsvBack/.monconfig 合并）
+# ============================================================
+
+[django]
+DEBUG=true
+SECRET_KEY=gsv-django-secret-key-change-in-production
+ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.1,*
+
+[database]
+ENGINE=django.db.backends.sqlite3
+NAME=Data/DB/SQLite/gsv.sqlite3
+
+[paths.gsvback]
+APPS_DIR=Code/GsvBack/apps
+STATIC_ROOT=Data/Static
+MEDIA_ROOT=Data/Media
+
+[log.gsvback]
+LEVEL=info
+FILE=Data/Logs/Text/GsvBack.log
+PLAIN_FILE=Data/Logs/Text/GsvBack_plain.log
+
+[process.gsvback]
+NAME=GsvBack-Django
+SCRIPT_START=Code/GsvBack/Script/start.sh
+SCRIPT_STOP=Code/GsvBack/Script/stop.sh
+ECOSYSTEM_CONFIG=Code/GsvBack/Script/ecosystem.config.js
+
+# 系统特定脚本路径（根据操作系统自动选择）
+[scripts.linux]
+BACKEND_START=Code/GsvBack/Script/start.sh
+BACKEND_STOP=Code/GsvBack/Script/stop.sh
+FRONTEND_START=Code/GptSov_Front/Script/start.sh
+FRONTEND_STOP=Code/GptSov_Front/Script/stop.sh
+FFMPEG_CMD=ffmpeg
+PYTHON_CMD=python
+NODE_CMD=node
+NPM_CMD=npm
+
+[scripts.windows]
+BACKEND_START=Code/GsvBack/Script/start.ps1
+BACKEND_STOP=Code/GsvBack/Script/stop.ps1
+FRONTEND_START=Code/GptSov_Front/Script/start.ps1
+FRONTEND_STOP=Code/GptSov_Front/Script/stop.ps1
+FFMPEG_CMD=ffmpeg.exe
+PYTHON_CMD=python.exe
+NODE_CMD=node.exe
+NPM_CMD=npm.cmd
+
+[scripts.macos]
+BACKEND_START=Code/GsvBack/Script/start.sh
+BACKEND_STOP=Code/GsvBack/Script/stop.sh
+FRONTEND_START=Code/GptSov_Front/Script/start.sh
+FRONTEND_STOP=Code/GptSov_Front/Script/stop.sh
+FFMPEG_CMD=ffmpeg
+PYTHON_CMD=python3
+NODE_CMD=node
+NPM_CMD=npm
+
+[model.gsvback]
+PRETRAINED_DIR=Env/Models/pretrained_models
+UVR5_DIR=Env/Models/uvr5_weights
+ASR_MODEL_DIR=tools/asr/models
+
+[audio.gsvback]
+SAMPLE_RATE=32000
+FORMAT=wav
+BIT_DEPTH=16
+CHANNELS=1
+
+# ============================================================
+# 打包排除配置 - 用于 pack.sh 打包脚本
+# ============================================================
+
+[pack]
+# 打包时排除的文件和目录（每行一个，支持通配符）
+EXCLUDE_PATTERNS=
+    .git
+    .gitignore
+    .github
+    __pycache__
+    *.pyc
+    *.pyo
+    *.pyd
+    .Python
+    *.so
+    *.egg
+    *.egg-info
+    dist
+    build
+    .venv
+    venv
+    env
+    .env
+    .idea
+    .vscode
+    *.swp
+    *.swo
+    *~
+    .DS_Store
+    Thumbs.db
+    node_modules
+    .npm
+    .yarn
+    *.log
+    logs
+    Log
+    Data/Logs
+    Data/Temp
+    Data/Output
+    Data/DB
+    Data/Media
+    Data/Static
+    logs
+    *.tar.gz
+    *.7z
+    *.zip
+    *.rar
+    .MonGSV
+    .monconfig.local
+    GPT_SoVITS/pretrained_models
+    GPT_SoVITS/text/G2PWModel
+    Env/Models/uvr5_weights
+    Env/Models/pretrained_models
+    tools/asr/models
+    *.ckpt
+    *.pth
+    *.onnx
+    *.bin
+    *.safetensors

@@ -1,0 +1,62 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# 虚拟环境（注意：Env/ 是项目配置目录，不能排除）
+.venv/
+venv/
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志文件（不排除，打包时保留）
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 模型文件（如果太大）
+*.pth
+*.ckpt
+*.pt
+*.bin
+
+# 预训练模型（很大）
+GPT_SoVITS/pretrained_models/
+
+# G2PW 模型（很大）
+GPT_SoVITS/text/G2PWModel
+GPT_SoVITS/text/G2PWModel_1.1.zip
+
+# 数据集（如果太大）
+Resources/Train/*/Asr/
+Resources/Train/*/0_gt_wavs/
+Resources/Train/*/1_16k_wavs/
+Resources/Train/*/2-name2text/
+Resources/Train/*/3-name2semantic/
+Resources/Train/*/4-cnhubert/
+Resources/Train/*/5-name2semantic/
+Resources/Train/*/6-name2semantic/
+
+# Node.js
+node_modules/
+package-lock.json
+yarn.lock
+
+# 系统文件
+.DS_Store
+Thumbs.db

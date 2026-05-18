@@ -1,0 +1,16 @@
+{
+  "role_name": "特蕾西娅V3",
+  "display_name": "特蕾西娅V3",
+  "world_name": "明日方舟",
+  "language": "zh",
+  "description": "",
+  "base_version": "v2ProPlus",
+  "gpt_model_id": null,
+  "gpt_model_name": "特蕾西娅V3-e20.ckpt",
+  "gpt_model_path": "D:\\code\\model\\MonGsvFastapi\\Resources\\Model\\明日方舟\\特蕾西娅V3\\v2ProPlus\\GPT\\特蕾西娅V3-e20.ckpt",
+  "sov_model_id": null,
+  "sov_model_name": "特蕾西娅V3_e20_s560.pth",
+  "sov_model_path": "D:\\code\\model\\MonGsvFastapi\\Resources\\Model\\明日方舟\\特蕾西娅V3\\v2ProPlus\\SoVITS\\特蕾西娅V3_e20_s560.pth",
+  "prompt_text": "不如说是丝线织就，在特雷西亚的记忆中生前。",
+  "prompt_audio_path": "D:\\code\\model\\MonGsvFastapi\\Resources\\Model\\明日方舟\\特蕾西娅V3\\v2ProPlus\\emotion\\[平淡][zh]不如说是丝线织就，在特雷西亚的记忆中生前。.wav"
+}

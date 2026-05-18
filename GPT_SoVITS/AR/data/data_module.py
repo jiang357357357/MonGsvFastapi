@@ -1,5 +1,6 @@
 # modified from https://github.com/yangdongchao/SoundStorm/blob/master/soundstorm/s1/AR/data/data_module.py
 # reference: https://github.com/lifeiteng/vall-e
+import torch
 from pytorch_lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
@@ -50,25 +51,28 @@ class Text2SemanticDataModule(LightningDataModule):
         )
         batch_size = max(min(batch_size, len(self._train_dataset) // 4), 1)  # 防止不保存
         sampler = DistributedBucketSampler(self._train_dataset, batch_size=batch_size)
+        use_worker_pool = self.num_workers > 0 and torch.cuda.is_available()
         return DataLoader(
             self._train_dataset,
             batch_size=batch_size,
             sampler=sampler,
             collate_fn=self._train_dataset.collate,
             num_workers=self.num_workers,
-            persistent_workers=True,
-            prefetch_factor=16,
+            persistent_workers=use_worker_pool,
+            prefetch_factor=16 if use_worker_pool else None,
         )
 
     def val_dataloader(self):
+        val_num_workers = max(self.num_workers, 12)
+        use_worker_pool = val_num_workers > 0 and torch.cuda.is_available()
         return DataLoader(
             self._dev_dataset,
             batch_size=1,
             shuffle=False,
             collate_fn=self._train_dataset.collate,
-            num_workers=max(self.num_workers, 12),
-            persistent_workers=True,
-            prefetch_factor=16,
+            num_workers=val_num_workers,
+            persistent_workers=use_worker_pool,
+            prefetch_factor=16 if use_worker_pool else None,
         )
 
     # 这个会使用到嘛？

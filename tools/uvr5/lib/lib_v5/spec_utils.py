@@ -485,8 +485,6 @@ def istft(spec, hl):
     wave_right = librosa.istft(spec_right, hop_length=hl)
     wave = np.asfortranarray([wave_left, wave_right])
 
-    return wave
-
 
 if __name__ == "__main__":
     import argparse
