@@ -5,6 +5,7 @@ import cn2an
 from pypinyin import lazy_pinyin, Style
 from pypinyin.contrib.tone_convert import to_finals_tone3, to_initials
 
+from text.g2pw_loader import load_g2pw
 from text.symbols import punctuation
 from text.tone_sandhi import ToneSandhi
 from text.zh_normalization.text_normlization import TextNormalizer
@@ -28,16 +29,10 @@ except ModuleNotFoundError:
     jieba.setLogLevel(logging.CRITICAL)
     import jieba.posseg as psg
 
-# is_g2pw_str = os.environ.get("is_g2pw", "True")##默认开启
-# is_g2pw = False#True if is_g2pw_str.lower() == 'true' else False
-is_g2pw = True  # True if is_g2pw_str.lower() == 'true' else False
+is_g2pw_str = os.environ.get("is_g2pw", "True")
+is_g2pw = is_g2pw_str.lower() == "true"
 if is_g2pw:
-    # print("当前使用g2pw进行拼音推理")
-    from text.g2pw import G2PWPinyin, correct_pronunciation
-
-    parent_directory = os.path.dirname(current_file_path)
-    g2pw = G2PWPinyin(
-        model_dir="GPT_SoVITS/text/G2PWModel",
+    g2pw, correct_pronunciation = load_g2pw(
         model_source=os.environ.get("bert_path", "GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"),
         v_to_u=False,
         neutral_tone_with_five=True,

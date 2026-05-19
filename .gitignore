@@ -63,7 +63,8 @@ GPT_SoVITS/text/G2PWModel_1.1.zip
 GPT_SoVITS/text/openjtalk_dic/
 GPT_SoVITS/text/open_jtalk_dic_utf_8-1.11/
 GPT_SoVITS/text/ja_userdic/
-GPT_SoVITS/text/g2pw/
+# GPT_SoVITS/text/g2pw/ contains vendored Python source and must stay tracked.
+GPT_SoVITS/text/g2pw/*.pickle
 GPT_SoVITS/text/*.pickle
 GPT_SoVITS/text/*.rep
 Env/Models/pretrained_models/

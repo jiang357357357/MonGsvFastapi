@@ -3,15 +3,18 @@ import os
 import sys
 import shutil
 
-# 添加 DownList 目录到路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 添加 _template 目录到路径
+_template_dir = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "_template"
+)
+sys.path.insert(0, _template_dir)
 from common import load_env_file, assume_yes
 
 PROJECT_ROOT, ENV_DIR = load_env_file()
 
 CONFIG = {
     "name": "中文字音转换模型",
-    "path": "GPT_SoVITS/text/G2PWModel"
+    "path": "GPT_SoVITS/text/G2PWModel",
 }
 
 def delete():

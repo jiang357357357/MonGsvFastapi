@@ -130,6 +130,12 @@ npm install
 - `FasterWhisperModels`
 - `UVR5Weights`
 
+注意：
+
+- `G2PWModel` 只是中文 G2PW 的模型数据
+- `GPT_SoVITS/text/g2pw/` 这套 Python 源码必须跟仓库一起存在
+- 缺少源码时，中文链路会在导入 `text.g2pw` 时直接失败
+
 检查示例：
 
 ```powershell
@@ -398,6 +404,7 @@ python Code/FastApi/Main/run_gateway.py cleanup
 通常先查这几件事：
 
 - 共享模型没装全
+- `GPT_SoVITS/text/g2pw/` 源码目录缺失，但你在跑中文流程
 - `ffmpeg` 不在 `PATH`
 - GPU / Torch 版本和当前机器不匹配
 - 输出目录没有写权限

@@ -24,8 +24,11 @@ $FullPath = Join-Path $WorkspaceRoot $TargetPath
 
 # 定义需要检查的文件
 $RequiredFiles = @(
-    "g2pw.pt",
-    "bert-base-chinese"
+    "g2pW.onnx",
+    "config.py",
+    "char_bopomofo_dict.json",
+    "MONOPHONIC_CHARS.txt",
+    "POLYPHONIC_CHARS.txt"
 )
 
 Write-Host "==================================================" -ForegroundColor Cyan

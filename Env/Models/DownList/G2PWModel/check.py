@@ -16,7 +16,13 @@ CONFIG = {
     "name": "中文字音转换模型",
     "env_var": "G2PW_MODEL_PATH",
     "default_path": "GPT_SoVITS/text/G2PWModel",
-    "files": ["g2pw.pt", "bert-base-chinese"],
+    "files": [
+        "g2pW.onnx",
+        "config.py",
+        "char_bopomofo_dict.json",
+        "MONOPHONIC_CHARS.txt",
+        "POLYPHONIC_CHARS.txt",
+    ],
 }
 
 

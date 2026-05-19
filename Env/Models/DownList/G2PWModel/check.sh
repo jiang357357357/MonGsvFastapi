@@ -20,6 +20,15 @@ find_project_root() {
 
 PROJECT_ROOT=$(find_project_root)
 TARGET_PATH="${PROJECT_ROOT}/GPT_SoVITS/text/G2PWModel"
+ENV_FILE="${PROJECT_ROOT}/Env/.env"
+
+if [[ -f "$ENV_FILE" ]]; then
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^G2PW_MODEL_PATH=(.+)$ ]]; then
+            TARGET_PATH="${PROJECT_ROOT}/${BASH_REMATCH[1]}"
+        fi
+    done < "$ENV_FILE"
+fi
 
 echo "=================================================="
 echo "[检查] 中文字音转换模型"
@@ -27,7 +36,7 @@ echo "=================================================="
 echo "  路径: $TARGET_PATH"
 echo ""
 
-FILES=("g2pW.onnx" "char_bopomofo_dict.json")
+FILES=("g2pW.onnx" "config.py" "char_bopomofo_dict.json" "MONOPHONIC_CHARS.txt" "POLYPHONIC_CHARS.txt")
 ALL_EXIST=true
 
 for file in "${FILES[@]}"; do

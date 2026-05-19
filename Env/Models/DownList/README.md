@@ -59,6 +59,14 @@
 
 - `GPT_SoVITS/text/G2PWModel`
 
+补充说明：
+
+- `G2PWModel` 只是模型数据目录
+- 它**不包含** `text.g2pw` 的 Python 源码
+- 仓库里还必须保留 `GPT_SoVITS/text/g2pw/` 这套源码文件
+
+如果只有 `G2PWModel`，但缺少 `GPT_SoVITS/text/g2pw/`，中文链路会在导入阶段直接失败。
+
 如果你只做英文、日文等非中文流程，它不是首要必需项；  
 但只要涉及中文文本合成，建议直接装上。
 
@@ -224,10 +232,12 @@
 | 模块目录 | 是否基础必需 | 目标安装位置 | 用途 |
 | --- | --- | --- | --- |
 | `PretrainedModels` | 是 | `GPT_SoVITS/pretrained_models` | 核心预训练模型 |
-| `G2PWModel` | 中文必需 | `GPT_SoVITS/text/G2PWModel` | 中文字音转换 |
+| `G2PWModel` | 中文必需 | `GPT_SoVITS/text/G2PWModel` | 中文字音转换模型数据 |
 | `FunASRModels` | 否 | `tools/asr/models` | 中文 / 粤语 ASR |
 | `FasterWhisperModels` | 否 | `tools/asr/models` | 英文 / 日文 / 多语 ASR |
 | `UVR5Weights` | 否 | `tools/uvr5/uvr5_weights` | 分离 / 去混响 / 去回声 |
+
+另外，`GPT_SoVITS/text/g2pw/` 是仓库源码，不属于 `DownList` 下载项。
 
 ## 怎么检查
 
