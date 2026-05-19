@@ -79,12 +79,13 @@ const CustomSelect: React.FC<CustomSelectProps> = ({
     }
   }, [isOpen, searchable]);
 
-  const selectedOption = options.find(opt => opt.id === value);
+  const safeOptions = options || [];
+  const selectedOption = safeOptions.find(opt => opt.id === value);
 
   // Filter options based on search query
   const filteredOptions = searchable && searchQuery
-    ? options.filter(opt => opt.name.toLowerCase().includes(searchQuery.toLowerCase()))
-    : options;
+    ? safeOptions.filter(opt => opt.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    : safeOptions;
 
   const variantStyles = variant === 'filled' 
     ? `theme-input hover:border-[var(--color-amber-400)]`

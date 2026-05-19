@@ -50,9 +50,6 @@ def gateway_temp_dir(config: Optional[MonConfig] = None) -> Path:
 
 
 def _port_processes_windows(port: int) -> List[GatewayProcessInfo]:
-    if os.name != "nt":
-        raise NotImplementedError("This tool currently supports Windows only.")
-
     result = subprocess.run(
         ["netstat", "-ano", "-p", "tcp"],
         capture_output=True,
@@ -81,8 +78,6 @@ def _port_processes_windows(port: int) -> List[GatewayProcessInfo]:
         if not local_address.endswith(port_suffix):
             continue
 
-        # 只有 LISTENING 才会真正阻止服务重新绑定端口。
-        # FIN_WAIT_2 / CLOSE_WAIT / TIME_WAIT 等都是连接收尾态，不应视为网关占用。
         if state != "LISTENING":
             continue
         if not pid_text.isdigit():
@@ -132,9 +127,49 @@ def _process_name_windows(pid: int) -> str:
     return name or "unknown"
 
 
+def _port_processes_linux(port: int) -> List[GatewayProcessInfo]:
+    result = subprocess.run(
+        ["ss", "-tlnp"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if result.returncode != 0 or not result.stdout:
+        return []
+
+    processes: List[GatewayProcessInfo] = []
+    port_str = f":{port}"
+    for line in result.stdout.splitlines():
+        if port_str not in line:
+            continue
+        # ss output: LISTEN 0 128 0.0.0.0:40032 0.0.0.0:* users:(("python",pid=12345,fd=4))
+        import re
+        match = re.search(r'pid=(\d+)', line)
+        if not match:
+            continue
+        pid = int(match.group(1))
+        name = _process_name_linux(pid)
+        processes.append(GatewayProcessInfo(pid=pid, name=name))
+    return processes
+
+
+def _process_name_linux(pid: int) -> str:
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip()
+    except Exception:
+        return "unknown"
+
+
+def _port_processes(port: int) -> List[GatewayProcessInfo]:
+    if os.name == "nt":
+        return _port_processes_windows(port)
+    return _port_processes_linux(port)
+
+
 def get_gateway_status(port: Optional[int] = None) -> GatewayStatus:
     port = port or gateway_port()
-    processes = _port_processes_windows(port)
+    processes = _port_processes(port)
     return GatewayStatus(port=port, occupied=bool(processes), processes=processes)
 
 
@@ -143,26 +178,23 @@ def stop_gateway(port: Optional[int] = None) -> GatewayStatus:
     if not status.occupied:
         return status
 
-    if os.name != "nt":
-        raise NotImplementedError("This tool currently supports Windows only.")
-
     target_pids = [process.pid for process in status.processes if process.pid > 0]
 
-    for process in status.processes:
-        if process.pid <= 0:
-            continue
-        subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                f"Stop-Process -Id {process.pid} -Force -ErrorAction SilentlyContinue",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
+    for pid in target_pids:
+        sig = subprocess.signal if os.name == "nt" else 15  # SIGTERM on Linux
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+            else:
+                os.kill(pid, sig)
+        except Exception:
+            pass
 
     for _ in range(10):
         time.sleep(0.5)
@@ -172,13 +204,19 @@ def stop_gateway(port: Optional[int] = None) -> GatewayStatus:
             return current_status
 
     for pid in target_pids:
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/F", "/T"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/F", "/T"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+            else:
+                os.kill(pid, 9)  # SIGKILL
+        except Exception:
+            pass
 
     for _ in range(10):
         time.sleep(0.5)

@@ -17,8 +17,8 @@ const RoleCard: React.FC<RoleCardProps> = ({
 	onEdit,
 	onDelete,
 }) => {
-	const gptModelFromList = gptModels.find(m => m.id === (role.gpt_model_id || role.gpt_model?.id));
-	const sovModelFromList = sovModels.find(m => m.id === (role.sov_model_id || role.sov_model?.id));
+	const gptModelFromList = (gptModels || []).find(m => m.id === (role.gpt_model_id || role.gpt_model?.id));
+	const sovModelFromList = (sovModels || []).find(m => m.id === (role.sov_model_id || role.sov_model?.id));
 	
 	const gptDisplayName = role.gpt_model_name || role.gpt_model?.name || gptModelFromList?.name;
 	const sovDisplayName = role.sov_model_name || role.sov_model?.name || sovModelFromList?.name;

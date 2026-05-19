@@ -57,11 +57,11 @@ const EmotionConfigView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Current emotion info
-  const currentEmotionInfo = emotions.find(e => e.emotion === selectedEmotion);
-  const selectedRole = characters.find(
+  const currentEmotionInfo = (emotions || []).find(e => e.emotion === selectedEmotion);
+  const selectedRole = (characters || []).find(
     (role) => role.name === selectedCharacterName && role.version === selectedVersionId,
   ) || null;
-  const selectedWorld = worlds.find(w => w.id === selectedWorldId) || null;
+  const selectedWorld = (worlds || []).find(w => w.id === selectedWorldId) || null;
   const selectedWorkspace = useMemo(() => {
     if (!selectedCharacterName || !selectedVersionId) {
       return null;

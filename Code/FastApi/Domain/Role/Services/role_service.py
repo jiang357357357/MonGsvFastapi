@@ -729,8 +729,8 @@ class RoleService:
         return source_path
 
     @staticmethod
-    def _list_files(directory: Path, allowed_suffixes: set[str] | None = None) -> list[str]:
-        if not directory.exists():
+    def _list_files(directory: Path | None, allowed_suffixes: set[str] | None = None) -> list[str]:
+        if directory is None or not directory.exists():
             return []
         suffixes = {item.lower() for item in allowed_suffixes} if allowed_suffixes else None
         files: list[str] = []

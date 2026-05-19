@@ -14,6 +14,7 @@ from common import (
     get_hf_endpoint_candidates,
     hf_hub_download_with_fallback,
     load_env_file,
+    ms_hub_download,
 )
 from module_config import CONFIG
 
@@ -51,26 +52,43 @@ def download(output_path=None, skip_existing=False):
     print(f"  安装目标: {get_target_path()}")
     print()
 
+    file_path = None
+    last_error = None
+
+    # 优先尝试魔塔
     try:
-        local_path = hf_hub_download_with_fallback(
+        file_path = ms_hub_download(
             repo_id=CONFIG["repo"],
             filename=CONFIG["file"],
-            repo_type="model",
         )
-        shutil.copy2(local_path, output_path)
-        file_size = os.path.getsize(output_path) / 1024 / 1024
+    except Exception as e:
+        last_error = e
+        print(f"  [!] 魔塔下载失败: {e}")
+        print(f"  [→] 回退到 HuggingFace...")
 
-        print("=" * 50)
-        print("[结果] ✓ 下载完成")
-        print(f"  文件大小: {file_size:.2f} MB")
-        print(f"  保存位置: {output_path}")
-        print("=" * 50)
-        print(f'提示: 使用 install.py 安装此文件，例如: python install.py "{output_path}"')
-        return output_path
-    except Exception:
-        if os.path.exists(output_path):
-            os.remove(output_path)
-        raise
+    # 魔塔失败则回退 HuggingFace
+    if file_path is None:
+        try:
+            file_path = hf_hub_download_with_fallback(
+                repo_id=CONFIG["repo"],
+                filename=CONFIG["file"],
+                repo_type="model",
+            )
+        except Exception as e:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise RuntimeError(f"所有下载方式均失败 (魔塔: {last_error}, HF: {e})") from e
+
+    shutil.copy2(file_path, output_path)
+    file_size = os.path.getsize(output_path) / 1024 / 1024
+
+    print("=" * 50)
+    print("[结果] ✓ 下载完成")
+    print(f"  文件大小: {file_size:.2f} MB")
+    print(f"  保存位置: {output_path}")
+    print("=" * 50)
+    print(f'提示: 使用 install.py 安装此文件，例如: python install.py "{output_path}"')
+    return output_path
 
 
 if __name__ == "__main__":

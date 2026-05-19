@@ -47,8 +47,8 @@ const SynthesisView: React.FC = () => {
   const emotionsRequestRef = useRef(0);
 
   const { isPlaying, audioBuffer, setAudioBuffer, playAudio, stopAudio } = useAudioPlayer();
-  const selectedRole = characters.find((character) => character.name === selectedCharacterName) || null;
-  const selectedEmotionInfo = emotions.find((emotion) => emotion.name === selectedEmotion) || null;
+  const selectedRole = (characters || []).find((character) => character.name === selectedCharacterName) || null;
+  const selectedEmotionInfo = (emotions || []).find((emotion) => emotion.name === selectedEmotion) || null;
 
   // Load versions on mount
   useEffect(() => {
