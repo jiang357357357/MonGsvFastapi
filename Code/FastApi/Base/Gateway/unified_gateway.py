@@ -1395,6 +1395,264 @@ async def reload_service(service_name: str):
         raise HTTPException(status_code=500, detail=f"服务重新加载失败: {exc}")
 
 
+# ==================== ASR 模块 ====================
+
+from Code.FastApi.Base.ASR import voice_service as asr_voice_service
+
+
+@app.websocket("/ws/asr/transcribe")
+async def ws_asr_transcribe(websocket):
+    from Code.FastApi.Base.ASR.consumers.asr import ASRWebSocketHandler
+    handler = ASRWebSocketHandler()
+    await websocket.accept()
+    await handler.handle_connect(websocket)
+    try:
+        while True:
+            raw = await websocket.receive()
+            if raw.get("type") == "websocket.receive":
+                if "bytes" in raw:
+                    payload = raw["bytes"]
+                    await handler.handle_audio(websocket, payload)
+                elif "text" in raw:
+                    await handler.handle_text(websocket, raw["text"])
+    except Exception:
+        pass
+
+
+@app.websocket("/ws/asr/vad")
+async def ws_asr_vad(websocket):
+    from Code.FastApi.Base.ASR.consumers.vad import VADWebSocketHandler
+    handler = VADWebSocketHandler()
+    await websocket.accept()
+    await handler.handle_connect(websocket)
+    try:
+        while True:
+            raw = await websocket.receive()
+            if raw.get("type") == "websocket.receive":
+                if "bytes" in raw:
+                    payload = raw["bytes"]
+                    await handler.handle_audio(websocket, payload)
+                elif "text" in raw:
+                    await handler.handle_text(websocket, raw["text"])
+    except Exception:
+        pass
+
+
+@app.post("/asr/speaker/register/")
+async def asr_speaker_register(
+    audio_file: UploadFile = File(...),
+    speaker_id: str = Form(...),
+    name: str = Form(...),
+    user: Any = Depends(get_current_user),
+):
+    """注册说话人声纹。"""
+    cleanup_paths: list[str] = []
+    try:
+        import tempfile
+
+        suffix = Path(audio_file.filename or "upload.wav").suffix or ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await audio_file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        cleanup_paths.append(tmp_path)
+
+        import subprocess
+        wav_path = tmp_path.replace(suffix, ".wav")
+        cleanup_paths.append(wav_path)
+        subprocess.run([
+            os.environ.get("FFMPEG_PATH", "ffmpeg"),
+            "-i", tmp_path, "-ar", "16000", "-ac", "1", "-y", wav_path,
+        ], capture_output=True, check=True)
+
+        embedding = asr_voice_service.speaker.get_embedding(wav_path)
+        success = asr_voice_service.speaker_db.register(speaker_id, name, embedding)
+        return {"success": success, "message": f"说话人 {name} 注册成功", "speaker_id": speaker_id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"注册失败: {exc}")
+    finally:
+        for p in cleanup_paths:
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+@app.post("/asr/speaker/unregister/")
+async def asr_speaker_unregister(
+    speaker_id: str = Form(...),
+    user: Any = Depends(get_current_user),
+):
+    """注销说话人。"""
+    try:
+        success = asr_voice_service.speaker_db.unregister(speaker_id)
+        if success:
+            return {"success": True, "message": f"说话人 {speaker_id} 已注销"}
+        raise HTTPException(status_code=404, detail=f"说话人 {speaker_id} 不存在")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"注销失败: {exc}")
+
+
+@app.get("/asr/speaker/list/")
+async def asr_speaker_list(
+    user: Any = Depends(get_current_user),
+):
+    """列出已注册的说话人。"""
+    try:
+        speakers = asr_voice_service.speaker_db.list_speakers()
+        return {"success": True, "speakers": speakers, "count": len(speakers)}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"获取列表失败: {exc}")
+
+
+@app.post("/asr/speaker/identify/")
+async def asr_speaker_identify(
+    audio_file: UploadFile = File(...),
+    threshold: float = Form(default=0.75),
+    user: Any = Depends(get_current_user),
+):
+    """识别音频中的说话人。"""
+    cleanup_paths: list[str] = []
+    try:
+        import tempfile
+        suffix = Path(audio_file.filename or "upload.wav").suffix or ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await audio_file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        cleanup_paths.append(tmp_path)
+
+        import subprocess
+        wav_path = tmp_path.replace(suffix, ".wav")
+        cleanup_paths.append(wav_path)
+        subprocess.run([
+            os.environ.get("FFMPEG_PATH", "ffmpeg"),
+            "-i", tmp_path, "-ar", "16000", "-ac", "1", "-y", wav_path,
+        ], capture_output=True, check=True)
+
+        result = asr_voice_service.identify_speaker_from_audio(wav_path, threshold)
+        return {"success": True, "result": result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"识别失败: {exc}")
+    finally:
+        for p in cleanup_paths:
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+@app.post("/asr/speaker/verify/")
+async def asr_speaker_verify(
+    audio1: UploadFile = File(...),
+    audio2: UploadFile = File(...),
+    user: Any = Depends(get_current_user),
+):
+    """验证两段音频是否同一人。"""
+    cleanup_paths: list[str] = []
+    try:
+        import tempfile
+        wav_paths: list[str] = []
+        for i, af in enumerate([audio1, audio2]):
+            suffix = Path(af.filename or f"audio{i}.wav").suffix or ".wav"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                content = await af.read()
+                tmp.write(content)
+                raw_path = tmp.name
+            cleanup_paths.append(raw_path)
+            wav_path = raw_path.replace(suffix, ".wav")
+            cleanup_paths.append(wav_path)
+            import subprocess
+            subprocess.run([
+                os.environ.get("FFMPEG_PATH", "ffmpeg"),
+                "-i", raw_path, "-ar", "16000", "-ac", "1", "-y", wav_path,
+            ], capture_output=True, check=True)
+            wav_paths.append(wav_path)
+
+        result = asr_voice_service.verify_speaker(wav_paths[0], wav_paths[1])
+        return {"success": True, "similarity": result["similarity"], "is_same": result["is_same"]}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"验证失败: {exc}")
+    finally:
+        for p in cleanup_paths:
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+@app.post("/asr/diarize/")
+async def asr_diarize(
+    audio_file: UploadFile = File(...),
+    language: str = Form(default="auto"),
+    threshold: float = Form(default=0.75),
+    user: Any = Depends(get_current_user),
+):
+    """说话人日志：VAD 分段 + ASR + 说话人聚类。"""
+    cleanup_paths: list[str] = []
+    try:
+        import tempfile
+        suffix = Path(audio_file.filename or "upload.wav").suffix or ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await audio_file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        cleanup_paths.append(tmp_path)
+
+        import subprocess
+        wav_path = tmp_path.replace(suffix, ".wav")
+        cleanup_paths.append(wav_path)
+        subprocess.run([
+            os.environ.get("FFMPEG_PATH", "ffmpeg"),
+            "-i", tmp_path, "-ar", "16000", "-ac", "1", "-y", wav_path,
+        ], capture_output=True, check=True)
+
+        result = asr_voice_service.process_audio_with_diarization(wav_path, language, threshold)
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"说话人日志失败: {exc}")
+    finally:
+        for p in cleanup_paths:
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+@app.post("/asr/transcribe/")
+async def asr_transcribe(
+    audio_file: UploadFile = File(...),
+    language: str = Form(default="auto"),
+    user: Any = Depends(get_current_user),
+):
+    """统一 ASR 转写接口（流式 Paraformer，单文件）。"""
+    cleanup_paths: list[str] = []
+    try:
+        import tempfile
+        suffix = Path(audio_file.filename or "upload.wav").suffix or ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await audio_file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        cleanup_paths.append(tmp_path)
+
+        import subprocess
+        wav_path = tmp_path.replace(suffix, ".wav")
+        cleanup_paths.append(wav_path)
+        subprocess.run([
+            os.environ.get("FFMPEG_PATH", "ffmpeg"),
+            "-i", tmp_path, "-ar", "16000", "-ac", "1", "-y", wav_path,
+        ], capture_output=True, check=True)
+
+        result = asr_voice_service.process_audio(wav_path)
+        return {
+            "success": result["status"] == "success",
+            "text": result.get("text", ""),
+            "status": result["status"],
+            "segments": result.get("segments", []),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"ASR 转写失败: {exc}")
+    finally:
+        for p in cleanup_paths:
+            if os.path.exists(p):
+                os.unlink(p)
+
+
 if __name__ == "__main__":
     import uvicorn
 

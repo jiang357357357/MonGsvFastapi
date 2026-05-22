@@ -9,7 +9,6 @@ GPT-SoVITS ASR语音识别 API 核心模块
 import asyncio
 import gc
 import os
-import sys
 import time
 import traceback
 from pathlib import Path
@@ -19,6 +18,7 @@ from typing import Any, Dict, List, Literal, Optional
 import torch
 from pydantic import BaseModel, Field
 
+from Code.FastApi.Base.ASR.engines.asr import ASRManager as UnifiedASREngine, write_output_file
 from Code.FastApi.Base.Inference.residency import ModelResidencyManager, ResidencyConfig
 
 
@@ -60,18 +60,14 @@ class ASRRecognitionService:
 
     def __init__(self, gpt_sovits_root: str = None):
         self.gpt_sovits_root = gpt_sovits_root or self._find_gpt_sovits_root()
-        self.asr_tools_dir = os.path.join(self.gpt_sovits_root, "tools", "asr")
         self._model_lock = RLock()
         self._request_lock = RLock()
-        self.current_model = None
+        self.current_model: Optional[UnifiedASREngine] = None
         self.current_model_key: Optional[str] = None
         self.current_model_descriptor: Optional[str] = None
         self.current_model_config: Optional[ASRConfig] = None
         self.current_model_type: Optional[str] = None
-        self.current_funasr_fallback_models: Dict[str, Any] = {}
-        self.funasr_module = None
-        self.fasterwhisper_module = None
-        self.fasterwhisper_import_error: Optional[str] = None
+        self._whisper_available = True
 
         self.asr_models = {
             "funasr": {
@@ -86,9 +82,6 @@ class ASRRecognitionService:
             },
         }
 
-        if not os.path.exists(self.asr_tools_dir):
-            raise FileNotFoundError(f"ASR工具目录不存在: {self.asr_tools_dir}")
-
         self.residency_manager = ModelResidencyManager(
             ResidencyConfig(
                 idle_ttl_seconds=int(os.environ.get("ASR_IDLE_TTL_SECONDS", "1200")),
@@ -96,8 +89,6 @@ class ASRRecognitionService:
                 cleanup_interval_seconds=int(os.environ.get("ASR_CLEANUP_INTERVAL_SECONDS", "60")),
             )
         )
-        self._setup_asr_environment()
-        self._import_asr_modules()
 
     def _find_gpt_sovits_root(self) -> str:
         """自动查找GPT-SoVITS项目根目录"""
@@ -121,55 +112,17 @@ class ASRRecognitionService:
 
         raise FileNotFoundError("无法找到GPT-SoVITS项目根目录")
 
-    def _setup_asr_environment(self):
-        if self.gpt_sovits_root not in sys.path:
-            sys.path.insert(0, self.gpt_sovits_root)
-
-    def _import_asr_modules(self):
-        import tools.asr.funasr_asr as funasr_asr
-
-        self.funasr_module = funasr_asr
-        try:
-            import tools.asr.fasterwhisper_asr as fasterwhisper_asr
-
-            self.fasterwhisper_module = fasterwhisper_asr
-            self.fasterwhisper_import_error = None
-        except Exception as exc:
-            self.fasterwhisper_module = None
-            self.fasterwhisper_import_error = str(exc)
-
-    def _get_funasr_module(self):
-        if self.funasr_module is None:
-            import tools.asr.funasr_asr as funasr_asr
-
-            self.funasr_module = funasr_asr
-        return self.funasr_module
-
-    def _get_fasterwhisper_module(self):
-        if self.fasterwhisper_module is None:
-            try:
-                import tools.asr.fasterwhisper_asr as fasterwhisper_asr
-            except Exception as exc:
-                self.fasterwhisper_import_error = str(exc)
-                raise RuntimeError(f"faster_whisper 不可用: {exc}") from exc
-            self.fasterwhisper_module = fasterwhisper_asr
-            self.fasterwhisper_import_error = None
-        return self.fasterwhisper_module
-
     def _clean_path(self, path_str: str) -> str:
-        """清理路径字符串"""
         if path_str.endswith(("\\", "/")):
             return self._clean_path(path_str[0:-1])
         path_str = path_str.replace("/", os.sep).replace("\\", os.sep)
         return path_str.strip(" '\n\"\u202a")
 
     def _validate_input(self, input_path: str) -> bool:
-        """验证输入路径"""
         clean_path = self._clean_path(input_path)
         return os.path.exists(clean_path)
 
     def _validate_config(self, config: ASRConfig) -> bool:
-        """验证配置参数"""
         model_info = self.asr_models.get(config.model_type)
         if not model_info:
             return False
@@ -182,43 +135,22 @@ class ASRRecognitionService:
         return True
 
     def _normalize_config(self, config: ASRConfig) -> ASRConfig:
-        if config.model_type == "faster_whisper":
-            normalized_size = self._get_fasterwhisper_module().normalize_model_size(config.model_size)
-            if normalized_size != config.model_size:
-                return config.model_copy(update={"model_size": normalized_size})
         return config
 
     def _build_model_descriptor(self, config: ASRConfig) -> str:
         if config.model_type == "funasr":
-            return f"{config.model_type}/{config.language}"
-        return f"{config.model_type}/{config.model_size}/{config.precision}"
+            return f"streaming/{config.language}"
+        return f"whisper/{config.model_size}/{config.precision}"
 
     def _build_model_key(self, descriptor: str) -> str:
         return self.residency_manager.build_model_key("asr", descriptor)
 
     def _load_primary_model(self, config: ASRConfig):
         if config.model_type == "funasr":
-            return self._get_funasr_module().create_model(config.language, use_cache=False)
+            return UnifiedASREngine(engine=UnifiedASREngine.ENGINE_STREAMING)
         if config.model_type == "faster_whisper":
-            return self._get_fasterwhisper_module().create_model(config.model_size, config.precision)
+            return UnifiedASREngine(engine=UnifiedASREngine.ENGINE_WHISPER)
         raise ValueError(f"不支持的ASR模型类型: {config.model_type}")
-
-    def _ensure_funasr_fallback_model(self, language: str):
-        if language not in {"zh", "yue"}:
-            return None
-        fallback_model = self.current_funasr_fallback_models.get(language)
-        if fallback_model is not None:
-            return fallback_model
-        print(f"[asr-residency] 加载 FunASR 辅助模型: {language}")
-        fallback_model = self._get_funasr_module().create_model(language, use_cache=False)
-        self.current_funasr_fallback_models[language] = fallback_model
-        return fallback_model
-
-    def _run_funasr_fallback(self, file_path: str, language: str) -> str:
-        fallback_model = self._ensure_funasr_fallback_model(language)
-        if fallback_model is None:
-            return ""
-        return self._get_funasr_module().transcribe_with_model(fallback_model, file_path)
 
     def _cleanup_runtime(self):
         self.current_model = None
@@ -226,7 +158,6 @@ class ASRRecognitionService:
         self.current_model_descriptor = None
         self.current_model_config = None
         self.current_model_type = None
-        self.current_funasr_fallback_models.clear()
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -252,7 +183,6 @@ class ASRRecognitionService:
         )
 
     def load_models(self, config: ASRConfig) -> bool:
-        """按配置加载并驻留一套ASR模型。"""
         normalized_config = self._normalize_config(config)
         descriptor = self._build_model_descriptor(normalized_config)
         requested_key = self._build_model_key(descriptor)
@@ -263,8 +193,6 @@ class ASRRecognitionService:
                     print(f"[asr-residency] 命中已驻留模型: {descriptor}")
                     self.current_model_config = normalized_config
                     self.residency_manager.register_loaded("asr", descriptor)
-                    if normalized_config.model_type == "faster_whisper" and normalized_config.language in {"zh", "yue"}:
-                        self._ensure_funasr_fallback_model(normalized_config.language)
                     return True
 
                 if self.current_model is not None:
@@ -278,8 +206,6 @@ class ASRRecognitionService:
                 self.current_model_config = normalized_config
                 self.current_model_type = normalized_config.model_type
                 self.residency_manager.register_loaded("asr", descriptor)
-                if normalized_config.model_type == "faster_whisper" and normalized_config.language in {"zh", "yue"}:
-                    self._ensure_funasr_fallback_model(normalized_config.language)
                 cleanup_result = self.cleanup_resident_models(force=True)
                 if cleanup_result.get("unloaded"):
                     print(f"[asr-residency] 清理驻留模型: {cleanup_result['unloaded']}")
@@ -292,10 +218,9 @@ class ASRRecognitionService:
                 return False
 
     def unload_models(self, reason: str = "manual") -> bool:
-        """卸载当前ASR模型并释放内存。"""
         with self._model_lock:
             current_key = self.current_model_key
-            if self.current_model is None and not self.current_funasr_fallback_models:
+            if self.current_model is None:
                 if current_key:
                     self.residency_manager.mark_unloaded(current_key, reason=reason)
                 return False
@@ -344,26 +269,14 @@ class ASRRecognitionService:
         if self.current_model is None:
             raise RuntimeError("ASR模型未加载")
 
-        if config.model_type == "funasr":
-            output_file_name, recognition_results = self._get_funasr_module().recognize_with_model(
-                self.current_model,
-                input_path,
-                config.language,
-            )
-        elif config.model_type == "faster_whisper":
-            output_file_name, recognition_results = self._get_fasterwhisper_module().recognize_with_model(
-                self.current_model,
-                input_path,
-                config.language,
-                beam_size=config.beam_size,
-                vad_filter=config.vad_filter,
-                vad_parameters=dict(min_silence_duration_ms=700),
-                funasr_fallback=self._run_funasr_fallback,
-            )
-        else:
-            raise ValueError(f"不支持的ASR模型类型: {config.model_type}")
+        engine_type = ""
+        if config.model_type == "faster_whisper":
+            engine_type = UnifiedASREngine.ENGINE_WHISPER
 
-        output_file = self._get_funasr_module().write_output_file(output_dir, output_file_name, recognition_results)
+        output_file_name, recognition_results = self.current_model.batch_transcribe(
+            input_path, config.language, engine=engine_type,
+        )
+        output_file = write_output_file(output_dir, output_file_name, recognition_results)
         return output_file, recognition_results
 
     def _recognize_audio_internal(self, request: ASRRequest) -> ASRResponse:
@@ -512,13 +425,10 @@ class ASRRecognitionService:
         return status
 
     def get_model_info(self) -> Dict[str, Any]:
-        """获取当前ASR模型信息。"""
         return {
             "model_descriptor": self.current_model_descriptor,
             "model_config": self.current_model_config.model_dump() if self.current_model_config else None,
             "models_loaded": self.current_model is not None,
             "supported_models": self.get_supported_models(),
-            "fasterwhisper_available": self.fasterwhisper_import_error is None,
-            "fasterwhisper_import_error": self.fasterwhisper_import_error,
             "residency": self._get_residency_status(),
         }
