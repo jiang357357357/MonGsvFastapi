@@ -1,3 +1,0 @@
-"""
-FastApi package root.
-"""

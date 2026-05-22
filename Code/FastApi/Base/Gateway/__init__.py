@@ -1,4 +1,0 @@
-"""
-Gateway runtime package.
-"""
-

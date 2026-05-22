@@ -1,3 +1,6 @@
 [submodule "Code/GptSov_Front"]
 	path = Code/GptSov_Front
 	url = https://github.com/jiang357357357/MonGsv-Front.git
+[submodule "Code/FastApi"]
+	path = Code/FastApi
+	url = https://github.com/jiang357357357/MonGsv-FastApi.git
