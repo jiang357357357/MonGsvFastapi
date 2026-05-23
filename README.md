@@ -54,10 +54,32 @@ MonGsvFastapi/
 
 - Python 3.10
 - Node.js
-- FFmpeg
+- FFmpeg shared 运行时
 - 可选：`uv`（推荐）
 
-确认 `ffmpeg` 和 `ffprobe` 已经在 `PATH` 里，音频切分、转码、训练预处理都会用到它们。
+Windows 下不要只放一个 `ffmpeg.exe`。  
+当前项目的音频链路还需要 FFmpeg 的 shared DLL，推荐直接把完整包放到以下任一目录：
+
+- `Tool/bin`
+- `Tool/ffmpeg/bin`
+
+至少需要包含：
+
+- `ffmpeg.exe`
+- `ffprobe.exe`
+- `avcodec-*.dll`
+- `avformat-*.dll`
+- `avutil-*.dll`
+- `swresample-*.dll`
+- `swscale-*.dll`
+
+项目启动时会自动把这两个目录注入运行时环境，不需要手动改系统 `PATH`。
+
+可以用下面的命令提前自检：
+
+```powershell
+.venv\Scripts\python.exe -c "from Code.runtime_env import ensure_audio_runtime; ensure_audio_runtime(strict=True, verify_torchcodec=True, verbose=True)"
+```
 
 ### 关于 Python 依赖
 
@@ -108,6 +130,101 @@ uv sync --link-mode=copy
 cd Code\GptSov_Front
 npm install
 ```
+
+## 给客户做离线 GPU 环境
+
+这个仓库现在的 Python 环境特征是：
+
+- Python：`3.10`
+- PyTorch：当前本地锁定为 `2.11.0+cu128`
+- `torch / torchaudio / torchvision`：来自 `CUDA 12.8` wheel 源
+
+也就是说，**最适合这个项目的交付方式不是直接拷 `.venv`**，而是：
+
+1. 你在开发机导出离线 wheel 包
+2. 把仓库源码 + `Env/OfflinePy` 一起打给客户
+3. 客户机器本地安装 `Python 3.10 x64`
+4. 客户离线创建 `.venv` 并从本地 wheel 安装
+
+这样比直接搬 `.venv` 更稳，尤其是 GPU 版 `torch`。
+
+### 开发机导出离线包
+
+先保证你自己的 `.venv` 已经能正常跑 GPU：
+
+```powershell
+.venv\Scripts\python.exe Env\PY\check_gpu.py
+```
+
+再导出离线环境：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Env\PY\export_offline.ps1
+```
+
+导出完成后会生成：
+
+```text
+Env/OfflinePy/
+├─ wheels/                 # 所有离线 wheel 包
+├─ requirements.lock.txt   # 从 uv.lock 导出的锁定依赖
+├─ install_offline.ps1     # 客户离线安装脚本
+├─ check_gpu.py            # 客户 GPU 自检脚本
+└─ bundle-info.txt         # 当前打包机 Python / Torch / GPU 信息
+```
+
+### 客户机器离线安装
+
+客户机器需要先满足：
+
+- Windows x64
+- Python `3.10.x`
+- NVIDIA 驱动已正确安装
+- 显卡驱动要能支持你当前交付的 `torch` CUDA 版本
+
+然后在项目根目录执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Env\OfflinePy\install_offline.ps1
+```
+
+安装完成后，脚本会自动打印：
+
+- Python 版本
+- `torch.__version__`
+- `torch.version.cuda`
+- `torch.cuda.is_available()`
+- `nvidia-smi` 输出
+
+### 客户机器手动检查 GPU
+
+如果要单独复查，可以运行：
+
+```powershell
+.venv\Scripts\python.exe Env\OfflinePy\check_gpu.py
+```
+
+或者直接看驱动：
+
+```powershell
+nvidia-smi
+```
+
+### 这种方案适合什么，不适合什么
+
+适合：
+
+- 客户不能翻墙
+- 客户机器可以安装 Python
+- 你们当前就打算继续沿用 `uv + .venv + Windows` 这条链路
+
+不适合：
+
+- 客户机器完全不能装 Python
+- 你想做到一份环境跨多种系统直接搬运
+- 你们后面会频繁切 CUDA 大版本
+
+如果后续要做更重的 GPU 交付，比如长期维护多台客户机、依赖持续增多、需要更强的环境可搬运性，再考虑 `conda-pack` 或 Docker。
 
 ## 准备模型
 

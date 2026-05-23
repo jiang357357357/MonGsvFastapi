@@ -73,6 +73,8 @@ Env/Models/pretrained_models/
 Env/Models/uvr5_weights/
 tools/asr/models/
 down/
+文档/参考/Mon_Hub_Main/
+文档/参考/funasr-back/
 
 # ------------------------------------------------------------
 # Generated role assets and training workspaces

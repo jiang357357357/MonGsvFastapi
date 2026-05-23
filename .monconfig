@@ -170,13 +170,4 @@ EXCLUDE_PATTERNS=
     *.rar
     .MonGSV
     .monconfig.local
-    GPT_SoVITS/pretrained_models
-    GPT_SoVITS/text/G2PWModel
-    Env/Models/uvr5_weights
-    Env/Models/pretrained_models
-    tools/asr/models
-    *.ckpt
-    *.pth
-    *.onnx
-    *.bin
-    *.safetensors
+    # 离线包需要保留 down/ 和已下载模型，因此不在这里排除模型目录与权重文件
