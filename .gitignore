@@ -39,6 +39,8 @@ Code/GptSov_Front/.vite-*.log
 Code/GptSov_Front/*.tsbuildinfo
 Code/GptSov_Front/7010_7010
 Tool/ffmpeg.exe
+Tool/bin/
+Tool/ffmpeg/
 
 # ------------------------------------------------------------
 # Runtime outputs / local state
@@ -70,6 +72,7 @@ GPT_SoVITS/text/*.rep
 Env/Models/pretrained_models/
 Env/Models/uvr5_weights/
 tools/asr/models/
+down/
 
 # ------------------------------------------------------------
 # Generated role assets and training workspaces
