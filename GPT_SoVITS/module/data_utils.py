@@ -55,8 +55,9 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         min_num = 100
         if leng < min_num:
             self.audiopaths_sid_text = []
-            for _ in range(max(2, int(min_num / leng))):
-                self.audiopaths_sid_text += tmp
+            if leng > 0:
+                for _ in range(max(2, int(min_num / leng))):
+                    self.audiopaths_sid_text += tmp
         self.max_wav_value = hparams.max_wav_value
         self.sampling_rate = hparams.sampling_rate
         self.filter_length = hparams.filter_length
@@ -309,8 +310,9 @@ class TextAudioSpeakerLoaderV3(torch.utils.data.Dataset):
         min_num = 100
         if leng < min_num:
             self.audiopaths_sid_text = []
-            for _ in range(max(2, int(min_num / leng))):
-                self.audiopaths_sid_text += tmp
+            if leng > 0:
+                for _ in range(max(2, int(min_num / leng))):
+                    self.audiopaths_sid_text += tmp
         self.max_wav_value = hparams.max_wav_value
         self.sampling_rate = hparams.sampling_rate
         self.filter_length = hparams.filter_length
@@ -547,8 +549,9 @@ class TextAudioSpeakerLoaderV4(torch.utils.data.Dataset):
         min_num = 100
         if leng < min_num:
             self.audiopaths_sid_text = []
-            for _ in range(max(2, int(min_num / leng))):
-                self.audiopaths_sid_text += tmp
+            if leng > 0:
+                for _ in range(max(2, int(min_num / leng))):
+                    self.audiopaths_sid_text += tmp
         self.max_wav_value = hparams.max_wav_value
         self.sampling_rate = hparams.sampling_rate
         self.filter_length = hparams.filter_length
@@ -758,8 +761,9 @@ class TextAudioSpeakerLoaderV3b(torch.utils.data.Dataset):
         min_num = 100
         if leng < min_num:
             self.audiopaths_sid_text = []
-            for _ in range(max(2, int(min_num / leng))):
-                self.audiopaths_sid_text += tmp
+            if leng > 0:
+                for _ in range(max(2, int(min_num / leng))):
+                    self.audiopaths_sid_text += tmp
         self.max_wav_value = hparams.max_wav_value
         self.sampling_rate = hparams.sampling_rate
         self.filter_length = hparams.filter_length

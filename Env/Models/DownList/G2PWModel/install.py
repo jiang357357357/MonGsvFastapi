@@ -3,8 +3,10 @@
 G2PWModel 安装脚本
 功能：解压已下载的模型文件到目标目录
 """
+import glob
 import os
 import sys
+import tempfile
 import zipfile
 import shutil
 import argparse
@@ -20,15 +22,25 @@ from common import load_env_file
 PROJECT_ROOT, ENV_DIR = load_env_file()
 
 
+def get_latest_download():
+    """在临时目录中找到最近下载的 G2PWModel zip 文件"""
+    pattern = os.path.join(tempfile.gettempdir(), "G2PWModel_*.zip")
+    matches = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    return matches[0] if matches else None
+
+
 def get_target_path():
     """从环境变量获取目标路径"""
     rel_path = os.environ.get('G2PW_MODEL_PATH', 'GPT_SoVITS/text/G2PWModel')
     return os.path.join(PROJECT_ROOT, rel_path)
 
 
-def install(source_file, force=False):
+def install(source_file=None, force=False):
     """安装模型文件"""
-    # 验证源文件
+    source_file = source_file or get_latest_download()
+    if not source_file:
+        print("错误: 未找到下载文件，请先运行 download.py")
+        sys.exit(1)
     if not os.path.exists(source_file):
         print(f"错误: 源文件不存在: {source_file}")
         sys.exit(1)
@@ -117,7 +129,7 @@ def install(source_file, force=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="安装 G2PWModel 模型")
-    parser.add_argument("source_file", help="要安装的 zip 文件路径")
+    parser.add_argument("source_file", nargs="?", help="要安装的 zip 文件路径（可选，默认自动查找最新下载）")
     parser.add_argument("--force", "-f", action="store_true", help="强制安装（删除已存在的目标）")
     args = parser.parse_args()
     

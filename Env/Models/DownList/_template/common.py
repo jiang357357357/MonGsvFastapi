@@ -249,6 +249,26 @@ def assume_yes():
     }
 
 
+def ms_hub_download(repo_id, filename, revision="master"):
+    """从魔塔 (ModelScope) 下载单个文件，返回本地缓存路径。"""
+    from modelscope.hub.file_download import model_file_download
+
+    print(f"  [→] 使用端点: 魔塔 (modelscope.cn)")
+    print(f"  [📥] 开始下载: {filename}")
+
+    local_path = model_file_download(
+        model_id=repo_id,
+        file_path=filename,
+        revision=revision,
+    )
+
+    file_size = os.path.getsize(local_path) / 1024 / 1024
+    print(f"  [✓] 下载完成: {file_size:.2f} MB")
+    print(f"  [📂] 文件位置: {local_path}")
+
+    return local_path
+
+
 def load_env_file():
     """加载 .env 文件并设置环境变量
     
