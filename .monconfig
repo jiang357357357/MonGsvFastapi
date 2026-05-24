@@ -44,8 +44,8 @@ PLAIN_FILE=Data/Logs/Text/GSV_plain.log
 
 [process]
 NAME=GSV-Service
-SCRIPT_START=scripts/start_gsv.sh
-SCRIPT_STOP=scripts/stop_gsv.sh
+SCRIPT_START=Code/Script/Back/Cmd/Linux/start.sh
+SCRIPT_STOP=Code/Script/Back/Cmd/Linux/stop.sh
 
 [model]
 DEFAULT_MODEL=GPT-SoVITS
@@ -93,30 +93,30 @@ ECOSYSTEM_CONFIG=Code/GsvBack/Script/ecosystem.config.js
 
 # 系统特定脚本路径（根据操作系统自动选择）
 [scripts.linux]
-BACKEND_START=Code/GsvBack/Script/start.sh
-BACKEND_STOP=Code/GsvBack/Script/stop.sh
-FRONTEND_START=Code/GptSov_Front/Script/start.sh
-FRONTEND_STOP=Code/GptSov_Front/Script/stop.sh
+BACKEND_START=Code/Script/Back/Cmd/Linux/start.sh
+BACKEND_STOP=Code/Script/Back/Cmd/Linux/stop.sh
+FRONTEND_START=Code/Script/Front/Cmd/Linux/start.sh
+FRONTEND_STOP=Code/Script/Front/Cmd/Linux/stop.sh
 FFMPEG_CMD=ffmpeg
 PYTHON_CMD=python
 NODE_CMD=node
 NPM_CMD=npm
 
 [scripts.windows]
-BACKEND_START=Code/GsvBack/Script/start.ps1
-BACKEND_STOP=Code/GsvBack/Script/stop.ps1
-FRONTEND_START=Code/GptSov_Front/Script/start.ps1
-FRONTEND_STOP=Code/GptSov_Front/Script/stop.ps1
+BACKEND_START=Code/Script/Back/Cmd/Win/start.ps1
+BACKEND_STOP=Code/Script/Back/Cmd/Win/stop.ps1
+FRONTEND_START=Code/Script/Front/Cmd/Win/start.ps1
+FRONTEND_STOP=Code/Script/Front/Cmd/Win/stop.ps1
 FFMPEG_CMD=ffmpeg.exe
 PYTHON_CMD=python.exe
 NODE_CMD=node.exe
 NPM_CMD=npm.cmd
 
 [scripts.macos]
-BACKEND_START=Code/GsvBack/Script/start.sh
-BACKEND_STOP=Code/GsvBack/Script/stop.sh
-FRONTEND_START=Code/GptSov_Front/Script/start.sh
-FRONTEND_STOP=Code/GptSov_Front/Script/stop.sh
+BACKEND_START=Code/Script/Back/Cmd/Linux/start.sh
+BACKEND_STOP=Code/Script/Back/Cmd/Linux/stop.sh
+FRONTEND_START=Code/Script/Front/Cmd/Linux/start.sh
+FRONTEND_STOP=Code/Script/Front/Cmd/Linux/stop.sh
 FFMPEG_CMD=ffmpeg
 PYTHON_CMD=python3
 NODE_CMD=node

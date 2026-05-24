@@ -32,7 +32,6 @@ pip-wheel-metadata/
 # Frontend local/build artifacts
 # ------------------------------------------------------------
 Code/GptSov_Front/node_modules/
-Code/GptSov_Front/dist/
 Code/GptSov_Front/.env.local
 Code/GptSov_Front/.env.*.local
 Code/GptSov_Front/.vite-*.log
