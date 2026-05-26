@@ -95,6 +95,20 @@ module.exports = {
       merge_logs: true,
     },
     {
+      name: 'MonGsvTunnel',
+      script: path.join(PROJECT_ROOT, 'Script', 'PM2', 'tunnel.sh'),
+      cwd: PROJECT_ROOT,
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '100M',
+      env: {},
+      error_file: path.join(LOG_DIR, 'tunnel-error.log'),
+      out_file: path.join(LOG_DIR, 'tunnel-out.log'),
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      merge_logs: true,
+    },
+    {
       name: 'MonGsvFrontend',
       script: viteEntry,
       args: [

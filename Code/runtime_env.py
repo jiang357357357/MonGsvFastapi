@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -32,6 +33,10 @@ def repo_root(start: Path | None = None) -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _system_ffmpeg_available() -> bool:
+    return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+
+
 def _iter_ffmpeg_dirs(root: Path) -> Iterable[Path]:
     yield root / "Tool" / "bin"
     yield root / "Tool" / "ffmpeg" / "bin"
@@ -51,6 +56,8 @@ def _has_ffmpeg_runtime_files(directory: Path) -> bool:
 
 
 def find_ffmpeg_runtime_dir(root: Path | None = None) -> Path | None:
+    if _system_ffmpeg_available():
+        return Path(os.path.dirname(shutil.which("ffmpeg") or "/usr/bin"))
     root = repo_root(root)
     for candidate in _iter_ffmpeg_dirs(root):
         if candidate.is_dir() and _has_ffmpeg_runtime_files(candidate):
@@ -59,11 +66,16 @@ def find_ffmpeg_runtime_dir(root: Path | None = None) -> Path | None:
 
 
 def configure_ffmpeg_runtime(root: Path | None = None, verbose: bool = False) -> Path | None:
-    root = repo_root(root)
     ffmpeg_dir = find_ffmpeg_runtime_dir(root)
     if ffmpeg_dir is None:
         return None
 
+    if _system_ffmpeg_available():
+        if verbose:
+            print(f"[runtime] 使用系统 FFmpeg: {ffmpeg_dir}")
+        return ffmpeg_dir
+
+    root = repo_root(root)
     ffmpeg_dir_str = str(ffmpeg_dir)
     path_parts = os.environ.get("PATH", "").split(os.pathsep)
     if ffmpeg_dir_str not in path_parts:
