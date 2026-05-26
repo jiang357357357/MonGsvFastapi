@@ -274,7 +274,7 @@ CNHuBERT 语义编码。
 | `text_language` | string | 否 | `"zh"` | 目标文本语言 |
 | `world_id` | int | 否 | `null` | 世界 ID；传入时后端会校验角色是否属于该世界 |
 | `version` | string | 否 | `null` | 版本；传入时后端会校验角色是否属于该版本 |
-| `how_to_cut` | string | 否 | `"按标点符号切"` | 文本切分方式 |
+| `how_to_cut` | string | 否 | `"凑四句一切"` | 文本切分方式 |
 | `top_k` | int | 否 | `20` | Top-K 采样 |
 | `top_p` | float | 否 | `0.6` | Top-P 采样 |
 | `temperature` | float | 否 | `0.6` | 温度参数 |
@@ -306,7 +306,7 @@ CNHuBERT 语义编码。
   "text": "博士，今天也辛苦了。",
   "text_language": "zh",
   "speed": 1.0,
-  "how_to_cut": "按标点符号切"
+  "how_to_cut": "凑四句一切"
 }
 ```
 

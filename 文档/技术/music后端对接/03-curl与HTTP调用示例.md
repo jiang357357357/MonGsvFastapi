@@ -81,7 +81,7 @@ curl -X POST "http://localhost:40302/api/synthesis/role-emotion" \
     "text": "博士，今天也辛苦了。",
     "text_language": "zh",
     "speed": 1.0,
-    "how_to_cut": "按标点符号切",
+    "how_to_cut": "凑四句一切",
     "return_base64": true
   }' \
   -o tts_response.json
@@ -584,7 +584,7 @@ async function synthesizeByRoleEmotion({ roleId, emotion, text, worldId, version
       text,
       text_language: 'zh',
       speed: 1.0,
-      how_to_cut: '按标点符号切',
+      how_to_cut: '凑四句一切',
       return_base64: true,
     }),
   });
