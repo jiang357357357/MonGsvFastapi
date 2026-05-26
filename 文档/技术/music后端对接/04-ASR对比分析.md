@@ -1,164 +1,187 @@
-# ASR 引擎对比分析
+# ASR 引擎与实时接口说明
 
-> 对比对象：**本项目**（MonGSV FastAPI） vs **funasr-back**（参考仓库）
+> 对接对象：MonGSV FastAPI 与 music 后端/前端。
 
 ---
 
-## 1. 架构对比
+## 1. 当前结论
 
-| 维度 | 本项目 (MonGSV) | funasr-back |
+MonGSV 现在有两条 ASR 链路，使用场景不同：
+
+| 场景 | 使用链路 | 模型 | 是否带标点 | 推荐用途 |
+|------|----------|------|------------|----------|
+| 训练数据准备 | 离线 ASR | `paraformer-large + fsmn-vad + ct-punc` | 是 | 切片后的批量标注、训练前预处理 |
+| 实时语音识别 | WebSocket streaming | `paraformer-zh-streaming` | final 阶段补标点 | 实时对话、语音输入、前端麦克风 |
+| 多语言单文件转录 | Faster-Whisper | `faster-whisper-*` | 依模型输出 | 非中文/自动语言检测 |
+
+**训练 ASR 不使用 `paraformer-zh-streaming`。** streaming 模型是实时场景用的，直接用于训练标注容易出现重复字、漏字、无标点等问题。
+
+---
+
+## 2. 训练 ASR
+
+训练流程中的 ASR 由 `asr_recognition` 服务执行：
+
+```text
+音频切片
+ -> ASR 识别
+ -> 文本处理
+ -> 音频特征
+ -> 语义编码
+ -> GPT / SoVITS 训练
+```
+
+默认配置：
+
+```text
+model_type = funasr
+language = zh
+```
+
+实际加载：
+
+```text
+speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
++ speech_fsmn_vad_zh-cn-16k-common-pytorch
++ punc_ct-transformer_zh-cn-common-vocab272727-pytorch
+```
+
+输出 `.list` 格式：
+
+```text
+audio_path|speaker|language|text
+```
+
+特点：
+
+- 适合训练标注。
+- 识别结果自带中文标点。
+- 会通过 VAD/标点模型提升完整句质量。
+- 失败时工作流会停止，并输出缺失项/失败原因，避免只切分完就直接进入训练。
+
+---
+
+## 3. 实时 ASR
+
+实时接口：
+
+```text
+ws://host:40302/ws/asr/transcribe
+```
+
+音频输入要求：
+
+| 项 | 要求 |
+|----|------|
+| 格式 | 裸 PCM 二进制 |
+| 采样率 | `16000 Hz` |
+| 声道 | 单声道 |
+| 位深 | signed int16 |
+| 字节序 | little-endian |
+
+调用流程：
+
+```text
+1. 建立 WebSocket
+2. 发送 {"command":"start"}
+3. 持续发送 PCM int16 二进制帧
+4. 接收 is_interim=true 的实时片段
+5. 结束时发送 {"command":"stop"}
+6. 接收 final_text
+```
+
+返回实时片段：
+
+```json
+{
+  "type": "result",
+  "text": "实时识别文本",
+  "accumulated": "实时识别文本",
+  "is_interim": true,
+  "sentence_end": false
+}
+```
+
+返回最终段落：
+
+```json
+{
+  "type": "result",
+  "text": "最终识别文本，带标点。",
+  "accumulated": "累计最终文本，带标点。",
+  "is_interim": false,
+  "sentence_end": true
+}
+```
+
+停止后返回：
+
+```json
+{
+  "type": "status",
+  "message": "录音结束",
+  "final_text": "完整最终文本，带标点。"
+}
+```
+
+---
+
+## 4. 为什么训练不用 streaming
+
+`paraformer-zh-streaming` 是在线流式模型，推荐按固定 chunk 连续输入，并维护 cache。它更适合“边说边显示”的场景。
+
+训练标注需要的是稳定、完整、带标点的句子，因此使用离线 `funasr_large` 更合适。
+
+实测同一批切片：
+
+```text
+streaming 修复前：我还个个会会会认是这你你不会我们们需要我哥道为
+streaming 修复后：我还记得这件会议室这是专门为特雷西亚控制的位置吗
+funasr_large：我还记得这间会议室，这是专门为特雷西亚控制的位置吗？
+```
+
+所以推荐：
+
+```text
+训练标注：funasr_large
+实时交互：paraformer-zh-streaming + final 标点恢复
+```
+
+---
+
+## 5. 本项目与 funasr-back 对比
+
+| 维度 | MonGSV FastAPI | funasr-back |
 |------|----------------|-------------|
-| **技术栈** | FastAPI + Uvicorn | Django 6.0 + Daphne (ASGI) |
-| **ASR 引擎数** | 双引擎：FunASR + Faster-Whisper | 单引擎：FunASR (Paraformer-streaming) |
-| **VAD** | FunASR 内置 FSMN-VAD | Silero VAD + 自研 VAD（双 VAD 策略） |
-| **标点恢复** | FunASR 内置 CT-Transformer | CT-Transformer（独立加载） |
-| **声纹识别** | 无 | ERes2Net（ModelScope） |
-| **WebSocket** | 无 | 支持（Channels） |
-| **模型驻留** | ModelResidencyManager（超时淘汰） | 无（全局单例常驻） |
-| **并发控制** | 线程锁 + 请求计数 | 无（单线程 ASGI） |
+| 后端框架 | FastAPI + Uvicorn | Django + Daphne |
+| 训练 ASR | `paraformer-large + VAD + PUNC` | 无训练链路 |
+| 实时 ASR | `/ws/asr/transcribe` | `ws/voice/transcribe/` |
+| 实时模型 | `paraformer-zh-streaming` | `paraformer-zh-streaming` |
+| 标点恢复 | final 阶段 `ct-punc` | 独立标点模型 |
+| 声纹识别 | 支持注册/识别/验证接口 | 支持 |
+| TTS 训练/推理 | 支持完整链路 | 不负责 |
 
 ---
 
-## 2. ASR 模型对比
+## 6. 对接建议
 
-### 本项目
+music 后端/前端建议这样用：
 
-**引擎一：FunASR（默认）**
-- 模型：`Paraformer-large`（非流式）
-- 路径：`tools/asr/models/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/`
-- 支持语言：中文、粤语
-- VAD：`speech_fsmn_vad_zh-cn-16k-common-pytorch`
-- 标点：`punc_ct-transformer_zh-cn-common-vocab272727-pytorch`
-- 模型源：ModelScope
+| 需求 | 调用接口 |
+|------|----------|
+| 上传音频并训练角色 | `/workflow/training-guide` 或 `/workflow/complete` |
+| 单文件转录 | `/inference/transcribe` |
+| 实时麦克风识别 | `/ws/asr/transcribe` |
+| 训练数据批量 ASR | `/data-prep/asr/recognize` |
 
-**引擎二：Faster-Whisper（备选）**
-- 模型：`Systran/faster-whisper-{large-v3/large-v2/medium...}`
-- 支持语言：99 种（含 auto 自动检测）
-- 中文场景自动 fallback 到 FunASR 以获得更好精度
-- 模型源：HuggingFace / ModelScope
+前端不要自己决定训练 ASR 模型，只需要传：
 
-**调度逻辑：**
-```python
-if 语言 in ("zh", "yue"):
-    走 FunASR（默认）
-else:
-    走 Faster-Whisper
-    如果检测到中文片段 → fallback 到 FunASR
+```text
+world
+version
+role
+language
+raw audio
 ```
 
-### funasr-back
-
-- 模型：`Paraformer-zh-streaming`（流式版）
-- 路径：FunASR AutoModel 自动管理
-- 支持语言：中文为主
-- VAD：Silero VAD + 自研 VAD 双重检测
-- 标点：`ct-punc-c`（独立加载）
-- 模型源：FunASR / ModelScope
-- 支持流式推理（2-pass：interim 实时 + final 确认）
-
----
-
-## 3. API 差异
-
-### 本项目 HTTP API
-
-| 端点 | 功能 | 请求格式 |
-|------|------|----------|
-| `POST /data-prep/asr/recognize` | 批量音频目录 ASR | form-data: `audio_dir`, `output_file`, `language` |
-| `POST /inference/transcribe` | 单文件轻量转录 | form-data: `audio_file` 上传, `language` |
-| `POST /inference/transcribe/models/load` | 预加载 ASR 模型 | form-data: `model_type`, `model_size`, `language` |
-| `GET /inference/transcribe/models/info` | 模型信息 | - |
-| `POST /inference/transcribe/models/unload` | 卸载模型 | - |
-
-### funasr-back HTTP API
-
-| 端点 | 功能 | 请求格式 |
-|------|------|----------|
-| `POST /voice/transcribe/` | 单文件 ASR | form-data: `audio` 上传 |
-| `POST /voice/speaker/register/` | 注册说话人声纹 | form-data: `audio`, `speaker_id`, `name` |
-| `POST /voice/speaker/unregister/` | 注销说话人 | form-data: `speaker_id` |
-| `GET /voice/speaker/list/` | 列出说话人 | - |
-| `POST /voice/speaker/identify/` | 识别说话人 | form-data: `audio`, `threshold` |
-| `POST /voice/speaker/verify/` | 验证两段音频 | form-data: `audio1`, `audio2` |
-| `POST /voice/diarize/` | 说话人日志 | form-data: `audio`, `language`, `threshold` |
-
-### funasr-back WebSocket API
-
-| 端点 | 功能 |
-|------|------|
-| `ws/voice/transcribe/` | 实时流式 ASR（2-pass：interim 实时片段 + final 精确确认） |
-| `ws/voice/vad/` | 实时 VAD 检测 |
-
----
-
-## 4. 核心代码量
-
-| 模块 | 本项目 | funasr-back |
-|------|--------|-------------|
-| ASR 引擎 | `tools/asr/funasr_asr.py` 201行 | `engines/asr.py` ~120行 |
-| | `tools/asr/fasterwhisper_asr.py` 266行 | |
-| ASR 服务层 | `Code/.../asr_recognition/service.py` 524行 | `services/voice_service.py` ~200行 |
-| | 含模型驻留、并发控制 | 全局单例，懒加载 |
-| WebSocket | 无 | `consumers/asr_consumer.py` ~270行 |
-| 声纹识别 | 无 | `engines/speaker.py` ~50行 |
-| | | `services/speaker_db.py` ~100行 |
-
----
-
-## 5. 模型文件缓存
-
-### 本项目
-
-```
-tools/asr/models/
-├── speech_fsmn_vad_zh-cn-16k-common-pytorch/     (VAD)
-├── punc_ct-transformer_zh-cn-common-vocab272727-pytorch/  (标点)
-├── speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/  (ASR)
-├── speech_UniASR_asr_2pass-cantonese-CHS-16k-common-vocab1468-tensorflow1-online/  (粤语)
-├── faster-whisper-large-v3/     (Whisper 备选)
-└── ...
-```
-
-通过 `ensure_snapshot()` 函数管理，检查本地文件后决定是否从 ModelScope 下载。
-
-### funasr-back
-
-通过 FunASR `AutoModel` 自动管理模型缓存，不显式指定本地路径。
-
----
-
-## 6. 流式 vs 非流式
-
-| 特性 | 本项目 | funasr-back |
-|------|--------|-------------|
-| 推理方式 | **非流式**（完整音频一次性处理） | 支持**流式**（WebSocket 实时） |
-| 实时性 | 适合后处理、训练数据准备 | 适合实时对话、语音交互 |
-| 分片策略 | 无（整个文件输入） | `chunk_size=[0,5,5]` 流式分片 |
-| 中间结果 | 无 | 2-pass：interim（实时片段）+ final（确认） |
-
----
-
-## 7. 版权与许可
-
-两者均使用相同的基础模型，依赖 ModelScope / HuggingFace 上的开源模型，许可兼容。
-
-关键依赖：
-```
-本项目: funasr==1.0.27
-funasr-back: funasr>=1.3.1
-```
-
----
-
-## 8. 总结
-
-| 你需要... | 用本项目 | 用 funasr-back |
-|-----------|----------|----------------|
-| 中文批量音频转文字（训练数据准备） | 适合 | 也可 |
-| 多语言 ASR（英/日/韩等） | 适合（Faster-Whisper） | 不适合 |
-| 实时流式语音识别 | 不适合 | 适合（WebSocket） |
-| 声纹注册/识别/验证 | 不适合 | 适合 |
-| 说话人日志（谁在什么时候说话） | 不适合 | 适合 |
-| TTS 全链路（数据→训练→推理） | 适合 | 不适合 |
-
-**一句话：本项目 ASR 是为 TTS 数据准备服务的配角，funasr-back 是专业 ASR + 声纹的独立服务。** (｀・ω・´)
+后端会按训练流程自动使用 `funasr_large` 完成标注。

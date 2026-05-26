@@ -51,6 +51,7 @@ Data/DB/
 Data/Media/
 Data/Static/
 TEMP/
+test/
 *.log
 *.tmp
 

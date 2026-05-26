@@ -473,6 +473,18 @@ CNHuBERT 语义编码。
 
 ## 6. ASR 转录（轻量接口）
 
+### ASR 使用原则
+
+ASR 分为训练标注和实时识别两条链路：
+
+| 场景 | 推荐接口 | 使用模型 |
+|------|----------|----------|
+| 训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | `funasr_large`，即 `paraformer-large + VAD + ct-punc` |
+| 单文件转录 | `/inference/transcribe` | 默认 `funasr` |
+| 实时语音输入 | `/ws/asr/transcribe` | `paraformer-zh-streaming`，final 阶段补标点 |
+
+训练标注不要使用 streaming 模型。训练流程默认会走离线 FunASR large，并输出带标点的 `.list` 文件。
+
 ### POST /inference/transcribe
 
 单文件语音转录，面向前端设计，返回文字而非文件。
@@ -525,6 +537,86 @@ CNHuBERT 语义编码。
 ### POST /inference/transcribe/models/cleanup
 
 ASR 驻留清理。
+
+### WebSocket /ws/asr/transcribe
+
+实时语音识别接口，面向前端麦克风或 music 后端实时语音输入。
+
+连接地址：
+
+```text
+ws://host:40302/ws/asr/transcribe
+```
+
+音频输入必须是裸 PCM 二进制：
+
+| 项 | 要求 |
+|----|------|
+| 采样率 | `16000 Hz` |
+| 声道 | 单声道 |
+| 位深 | signed int16 |
+| 字节序 | little-endian |
+
+调用流程：
+
+```text
+1. 建立 WebSocket
+2. 发送 {"command":"start"}
+3. 持续发送 PCM int16 二进制帧
+4. 接收 is_interim=true 的实时片段
+5. 结束时发送 {"command":"stop"}
+6. 接收 final_text
+```
+
+连接成功响应：
+
+```json
+{
+  "type": "connection",
+  "status": "connected",
+  "message": "2-pass 流式识别已就绪"
+}
+```
+
+实时片段响应：
+
+```json
+{
+  "type": "result",
+  "text": "实时识别文本",
+  "accumulated": "实时识别文本",
+  "is_interim": true,
+  "sentence_end": false
+}
+```
+
+最终段落响应：
+
+```json
+{
+  "type": "result",
+  "text": "最终识别文本，带标点。",
+  "accumulated": "累计最终文本，带标点。",
+  "is_interim": false,
+  "sentence_end": true,
+  "speaker_id": null,
+  "speaker_name": null,
+  "speaker_similarity": null,
+  "speaker_is_known": null
+}
+```
+
+停止响应：
+
+```json
+{
+  "type": "status",
+  "message": "录音结束",
+  "final_text": "完整最终文本，带标点。"
+}
+```
+
+注意：不要向该接口发送 mp3/wav/m4a 文件块。浏览器或后端调用方需要先解码并转成 `16k mono int16 PCM`。
 
 ---
 

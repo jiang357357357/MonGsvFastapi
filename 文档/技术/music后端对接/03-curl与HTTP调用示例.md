@@ -694,6 +694,46 @@ async function transcribeAudio(audioBlob) {
 }
 ```
 
+### 实时 ASR WebSocket
+
+```javascript
+async function startRealtimeAsr(pcmStream) {
+  const ws = new WebSocket('ws://localhost:40302/ws/asr/transcribe');
+  ws.binaryType = 'arraybuffer';
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    if (data.type === 'result' && data.is_interim) {
+      console.log('实时片段:', data.text);
+    }
+
+    if (data.type === 'result' && !data.is_interim) {
+      console.log('最终段落:', data.text);
+    }
+
+    if (data.type === 'status' && data.final_text !== undefined) {
+      console.log('完整文本:', data.final_text);
+    }
+  };
+
+  await new Promise((resolve) => {
+    ws.onopen = resolve;
+  });
+
+  ws.send(JSON.stringify({ command: 'start' }));
+
+  // pcmStream 需要持续产出 16kHz / mono / signed int16 / little-endian 的 PCM 二进制帧。
+  for await (const pcmChunk of pcmStream) {
+    ws.send(pcmChunk);
+  }
+
+  ws.send(JSON.stringify({ command: 'stop' }));
+}
+```
+
+实时接口只接收裸 PCM 二进制，不接收 mp3/wav/m4a 文件块。final 结果会由后端自动补标点。
+
 ### 角色管理
 
 ```javascript
