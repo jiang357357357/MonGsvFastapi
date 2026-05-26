@@ -258,6 +258,80 @@ CNHuBERT 语义编码。
 
 ## 5. TTS 推理
 
+### POST /api/synthesis/role-emotion
+
+按角色与情感合成语音。**这是前端和 music 后端推荐使用的业务接口**。
+
+调用方只提交业务选择：世界、版本、角色、情感和文本。后端负责查找角色模型路径、情感参考音频、参考文本，自动加载 GPT/SoVITS 模型，然后执行底层推理。
+
+**请求参数（application/json）：**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `role_id` | int | **是** | - | 角色 ID |
+| `emotion` | string | **是** | - | 情感名称，需存在于该角色的情感配置中 |
+| `text` | string | **是** | - | 要合成的文本 |
+| `text_language` | string | 否 | `"zh"` | 目标文本语言 |
+| `world_id` | int | 否 | `null` | 世界 ID；传入时后端会校验角色是否属于该世界 |
+| `version` | string | 否 | `null` | 版本；传入时后端会校验角色是否属于该版本 |
+| `how_to_cut` | string | 否 | `"按标点符号切"` | 文本切分方式 |
+| `top_k` | int | 否 | `20` | Top-K 采样 |
+| `top_p` | float | 否 | `0.6` | Top-P 采样 |
+| `temperature` | float | 否 | `0.6` | 温度参数 |
+| `speed` | float | 否 | `1.0` | 语速 |
+| `sample_steps` | int | 否 | `8` | 采样步数 |
+| `if_sr` | bool | 否 | `false` | 启用音频超分 |
+| `ref_free` | bool | 否 | `false` | 无参考模式 |
+| `if_freeze` | bool | 否 | `false` | 冻结缓存 |
+| `pause_second` | float | 否 | `0.3` | 句间停顿(秒) |
+| `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
+
+**后端内部解析规则：**
+
+| 来源 | 字段 | 用途 |
+|------|------|------|
+| 角色 `GET /api/role/list/` | `gpt_model_path` | 自动加载 GPT 模型 |
+| 角色 `GET /api/role/list/` | `sov_model_path` | 自动加载 SoVITS 模型 |
+| 情感 `GET /api/role/emotions/` | `music_url` | 作为底层推理的 `ref_audio_path` |
+| 情感 `GET /api/role/emotions/` | `text` | 作为底层推理的 `prompt_text` |
+| 情感 `GET /api/role/emotions/` | `text_language` | 作为底层推理的 `prompt_language` |
+
+**请求示例：**
+```json
+{
+  "world_id": 1,
+  "version": "v2Pro",
+  "role_id": 1,
+  "emotion": "温柔",
+  "text": "博士，今天也辛苦了。",
+  "text_language": "zh",
+  "speed": 1.0,
+  "how_to_cut": "按标点符号切"
+}
+```
+
+**响应示例（return_base64=true）：**
+```json
+{
+  "success": true,
+  "message": "推理完成",
+  "audio_data": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQ...",
+  "sample_rate": 32000,
+  "duration": 3.5,
+  "processing_time": 1.23,
+  "text_segments": ["博士，今天也辛苦了。"]
+}
+```
+
+**常见错误：**
+
+| 状态码 | detail | 说明 |
+|--------|--------|------|
+| `400` | `当前角色缺少 GPT 或 SoVITS 模型路径` | 角色没有可用模型 |
+| `400` | `当前角色没有情感配置: xxx` | 情感名称不存在 |
+| `400` | `当前情感缺少参考音频` | 情感配置没有可用参考音频 |
+| `400` | `模型加载失败` | 模型路径无效或权重加载失败 |
+
 ### POST /inference/models/load
 
 加载推理模型。
@@ -286,7 +360,7 @@ CNHuBERT 语义编码。
 
 ### POST /inference/tts
 
-文本转语音推理。
+文本转语音推理。**这是底层接口**，不会自动根据角色或情感查找参考音频，也不会自动选择角色模型。业务对接优先使用 `POST /api/synthesis/role-emotion`。
 
 **请求参数（form-data）：**
 
@@ -604,6 +678,8 @@ ASR 驻留清理。
 **响应示例：**
 ```json
 {
+  "success": true,
+  "message": "ok",
   "world_id": null,
   "world_name": null,
   "roles": [
@@ -612,15 +688,24 @@ ASR 驻留清理。
       "name": "小明",
       "description": "",
       "world_id": 1,
+      "world_name": "Standalone",
       "version": "v2Pro",
       "gpt_model_id": null,
+      "gpt_model_name": "my_role.ckpt",
+      "gpt_model_path": "D:/code/model/mongsvfastapi/Resources/Model/Standalone/小明/v2Pro/GPT/my_role.ckpt",
       "sov_model_id": null,
-      "created_at": "..."
+      "sov_model_name": "my_role.pth",
+      "sov_model_path": "D:/code/model/mongsvfastapi/Resources/Model/Standalone/小明/v2Pro/SoVITS/my_role.pth",
+      "prompt_text": "参考文本",
+      "prompt_audio_path": "D:/code/model/mongsvfastapi/Resources/Model/Standalone/小明/v2Pro/emotion/温柔__zh__参考文本.wav",
+      "language": "zh"
     }
   ],
   "count": 1
 }
 ```
+
+`gpt_model_path` 和 `sov_model_path` 是后端业务合成接口自动加载模型时使用的字段。普通前端不需要直接使用这两个字段，除非在测试页或高级模式直接调用 `/inference/models/load`。
 
 #### POST /api/role/create/
 
@@ -683,6 +768,35 @@ ASR 驻留清理。
 #### 情感配置
 
 **GET /api/role/emotions/?role_id=1** — 列出角色情感配置
+
+**响应示例：**
+```json
+{
+  "success": true,
+  "message": "ok",
+  "role_id": 1,
+  "emotions": [
+    {
+      "name": "温柔",
+      "text": "博士，今天也辛苦了。",
+      "music_url": "D:/code/model/mongsvfastapi/Resources/Model/Standalone/小明/v2Pro/emotion/温柔__zh__博士，今天也辛苦了.wav",
+      "text_language": "zh",
+      "file_name": "温柔__zh__博士，今天也辛苦了.wav"
+    }
+  ],
+  "count": 1
+}
+```
+
+字段说明：
+
+| 字段 | 说明 |
+|------|------|
+| `name` | 情感名称 |
+| `text` | 参考音频对应文本，会作为业务合成时的 `prompt_text` |
+| `music_url` | 情感参考音频路径，会作为业务合成时的 `ref_audio_path` |
+| `text_language` | 参考文本语言，会作为业务合成时的 `prompt_language` |
+| `file_name` | 情感音频文件名 |
 
 **POST /api/role/emotions/upsert/** — 创建或更新情感配置（form-data）
 

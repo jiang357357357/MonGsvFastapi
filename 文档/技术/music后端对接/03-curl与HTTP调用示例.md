@@ -66,6 +66,58 @@ curl -s "http://localhost:40302/services/status" | python -m json.tool
 
 ## 2. TTS 推理完整流程
 
+### 推荐流程：按角色 + 情感合成
+
+这是前端和 music 后端推荐使用的接口。调用方只需要传业务字段，后端会自动加载角色模型，并从情感配置中取参考音频和参考文本。
+
+```bash
+curl -X POST "http://localhost:40302/api/synthesis/role-emotion" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "world_id": 1,
+    "version": "v2Pro",
+    "role_id": 1,
+    "emotion": "温柔",
+    "text": "博士，今天也辛苦了。",
+    "text_language": "zh",
+    "speed": 1.0,
+    "how_to_cut": "按标点符号切",
+    "return_base64": true
+  }' \
+  -o tts_response.json
+```
+
+解析结果保存音频：
+
+```bash
+cat tts_response.json | jq -r '.audio_data' | base64 -d > output.wav
+```
+
+完整业务链路：
+
+```bash
+# 1. 查世界
+curl -s "http://localhost:40302/api/world/list/" | python -m json.tool
+
+# 2. 查版本
+curl -s "http://localhost:40302/api/models/versions/from-enum/" | python -m json.tool
+
+# 3. 查角色，记录 role.id
+curl -s "http://localhost:40302/api/role/list/?world_id=1&version=v2Pro" | python -m json.tool
+
+# 4. 查情感，记录 emotions[].name
+curl -s "http://localhost:40302/api/role/emotions/?role_id=1" | python -m json.tool
+
+# 5. 用 role_id + emotion 合成
+curl -X POST "http://localhost:40302/api/synthesis/role-emotion" \
+  -H "Content-Type: application/json" \
+  -d '{"role_id":1,"emotion":"温柔","text":"你好。","text_language":"zh"}'
+```
+
+### 高级流程：直接调用底层推理接口
+
+底层 `/inference/tts` 不会自动解析角色或情感。调用方必须先加载模型，并显式传 `ref_audio` 或 `ref_audio_path`。
+
 ### 步骤一：加载模型
 
 ```bash
@@ -517,7 +569,50 @@ curl -s "http://localhost:40302/api/models/versions/from-dir/" | python -m json.
 
 ## 9. JavaScript fetch 示例
 
-### TTS 推理
+### TTS 推理（推荐：按角色 + 情感）
+
+```javascript
+async function synthesizeByRoleEmotion({ roleId, emotion, text, worldId, version }) {
+  const res = await fetch('http://localhost:40302/api/synthesis/role-emotion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      role_id: roleId,
+      world_id: worldId,
+      version,
+      emotion,
+      text,
+      text_language: 'zh',
+      speed: 1.0,
+      how_to_cut: '按标点符号切',
+      return_base64: true,
+    }),
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || error.message || `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+async function main() {
+  const result = await synthesizeByRoleEmotion({
+    worldId: 1,
+    version: 'v2Pro',
+    roleId: 1,
+    emotion: '温柔',
+    text: '博士，今天也辛苦了。',
+  });
+
+  if (result.success) {
+    playBase64Audio(result.audio_data);
+  }
+}
+```
+
+### TTS 推理（高级：底层接口）
 
 ```javascript
 // 加载模型

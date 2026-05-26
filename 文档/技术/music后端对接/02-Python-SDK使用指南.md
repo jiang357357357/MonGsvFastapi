@@ -49,7 +49,50 @@ finally:
 
 ## TTS 语音合成
 
-### 基本流程：加载模型 -> 推理
+### 推荐流程：按角色 + 情感合成
+
+业务系统推荐调用 `POST /api/synthesis/role-emotion`。这种方式不需要调用方关心 `gpt_model_path`、`sov_model_path`、`ref_audio_path`、`prompt_text` 等底层字段。
+
+```python
+import base64
+import requests
+
+base_url = "http://192.168.1.100:40302"
+
+payload = {
+    "world_id": 1,
+    "version": "v2Pro",
+    "role_id": 1,
+    "emotion": "温柔",
+    "text": "博士，今天也辛苦了。",
+    "text_language": "zh",
+    "speed": 1.0,
+    "how_to_cut": "按标点符号切",
+    "return_base64": True,
+}
+
+response = requests.post(f"{base_url}/api/synthesis/role-emotion", json=payload)
+response.raise_for_status()
+data = response.json()
+
+if data.get("success"):
+    with open("output.wav", "wb") as f:
+        f.write(base64.b64decode(data["audio_data"]))
+else:
+    raise RuntimeError(data.get("message") or "合成失败")
+```
+
+后端会自动完成：
+
+1. 根据 `role_id` 查角色。
+2. 根据 `emotion` 查情感配置。
+3. 使用角色的 `gpt_model_path` / `sov_model_path` 自动加载模型。
+4. 使用情感的 `music_url` / `text` / `text_language` 作为参考音频和参考文本。
+5. 调用底层推理并返回音频。
+
+### 高级流程：加载模型 -> 底层推理
+
+下面是直接调用底层 `/inference/*` 的方式。只有在测试、调试或自定义参考音频时建议使用。
 
 ```python
 # 1. 加载模型
