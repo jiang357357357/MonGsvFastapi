@@ -11,7 +11,8 @@ MonGSV 现在有两条 ASR 链路，使用场景不同：
 | 场景 | 使用链路 | 模型 | 是否带标点 | 推荐用途 |
 |------|----------|------|------------|----------|
 | 训练数据准备 | 离线 ASR | `paraformer-large + fsmn-vad + ct-punc` | 是 | 切片后的批量标注、训练前预处理 |
-| 实时语音识别 | WebSocket streaming | `paraformer-zh-streaming` | final 阶段补标点 | 实时对话、语音输入、前端麦克风 |
+| 实时语音识别（推荐） | `/ws/asr/final` | VAD 断句 + final ASR | 是 | 实时对话、LLM 语音输入 |
+| 实时中间字幕 | `/ws/asr/transcribe` | `paraformer-zh-streaming` | final 阶段补标点 | 边说边显示字幕 |
 | 多语言单文件转录 | Faster-Whisper | `faster-whisper-*` | 依模型输出 | 非中文/自动语言检测 |
 
 **训练 ASR 不使用 `paraformer-zh-streaming`。** streaming 模型是实时场景用的，直接用于训练标注容易出现重复字、漏字、无标点等问题。
@@ -63,17 +64,19 @@ audio_path|speaker|language|text
 
 ## 3. 实时 ASR
 
-实时接口：
+推荐实时接口：
 
 ```text
-ws://host:40302/ws/asr/transcribe
+ws://host:40302/ws/asr/final
 ```
 
 连接成功后，后端会立即返回：
 
 ```json
-{"type":"connection","status":"connected","message":"2-pass 流式识别已就绪"}
+{"type":"connection","status":"connected","message":"VAD final 识别已就绪"}
 ```
+
+`/ws/asr/final` 使用 VAD 判断一句话结束，然后把该段 PCM 送入 final ASR。它会保留约 1.2 秒前置音频，避免 VAD 从 `speech=false` 切到 `speech=true` 之前的开头人声被丢弃。
 
 音频输入要求：
 
@@ -95,6 +98,8 @@ ws://host:40302/ws/asr/transcribe
 5. 结束时发送 {"command":"stop"}
 6. 接收 final_text
 ```
+
+对 `/ws/asr/final`，第 4 步不会返回 interim，而是在 VAD 断句后返回 `is_interim=false` 的最终段落。只有需要“边说边显示”的字幕体验时，才使用 `/ws/asr/transcribe`。
 
 返回实时片段：
 
@@ -132,12 +137,12 @@ ws://host:40302/ws/asr/transcribe
 
 ### 403 握手排查
 
-当前 `/ws/asr/transcribe` 不做 token 鉴权，也不限制 Origin。若 `GET /health`、`/docs` 正常，但 WebSocket 握手返回 `HTTP 403 Forbidden`，同时普通 HTTP GET `/ws/asr/transcribe` 返回 `404 Not Found`，通常不是 MonCore 代理链路问题，而是 GSV 后端没有跑到正确的 WebSocket 路由。
+当前 `/ws/asr/final` 和 `/ws/asr/transcribe` 不做 token 鉴权，也不限制 Origin。若 `GET /health`、`/docs` 正常，但 WebSocket 握手返回 `HTTP 403 Forbidden`，同时普通 HTTP GET WebSocket 路径返回 `404 Not Found`，通常不是 MonCore 代理链路问题，而是 GSV 后端没有跑到正确的 WebSocket 路由。
 
 优先检查：
 
 ```bash
-grep -RIn "ws/asr/transcribe\\|websocket: WebSocket" Code/FastApi/Base/Gateway
+grep -RIn "ws/asr/final\\|ws/asr/transcribe\\|websocket: WebSocket" Code/FastApi/Base/Gateway
 pm2 describe MonGsvBackend
 pm2 logs MonGsvBackend --lines 80 --nostream
 ```
@@ -145,7 +150,7 @@ pm2 logs MonGsvBackend --lines 80 --nostream
 正确的 PM2 后端应启动统一网关入口，并且握手日志应显示：
 
 ```text
-"WebSocket /ws/asr/transcribe" [accepted]
+"WebSocket /ws/asr/final" [accepted]
 connection open
 ```
 
@@ -180,7 +185,7 @@ funasr_large：我还记得这间会议室，这是专门为特雷西亚控制�
 |------|----------------|-------------|
 | 后端框架 | FastAPI + Uvicorn | Django + Daphne |
 | 训练 ASR | `paraformer-large + VAD + PUNC` | 无训练链路 |
-| 实时 ASR | `/ws/asr/transcribe` | `ws/voice/transcribe/` |
+| 实时 ASR | `/ws/asr/final`，或 `/ws/asr/transcribe` | `ws/voice/transcribe/` |
 | 实时模型 | `paraformer-zh-streaming` | `paraformer-zh-streaming` |
 | 标点恢复 | final 阶段 `ct-punc` | 独立标点模型 |
 | 声纹识别 | 支持注册/识别/验证接口 | 支持 |
@@ -196,7 +201,8 @@ music 后端/前端建议这样用：
 |------|----------|
 | 上传音频并训练角色 | `/workflow/training-guide` 或 `/workflow/complete` |
 | 单文件转录 | `/inference/transcribe` |
-| 实时麦克风识别 | `/ws/asr/transcribe` |
+| 实时麦克风识别/对话输入 | `/ws/asr/final` |
+| 实时中间字幕 | `/ws/asr/transcribe` |
 | 训练数据批量 ASR | `/data-prep/asr/recognize` |
 
 前端不要自己决定训练 ASR 模型，只需要传：

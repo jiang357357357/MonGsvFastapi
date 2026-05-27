@@ -700,17 +700,15 @@ async function transcribeAudio(audioBlob) {
 
 ### 实时 ASR WebSocket
 
+推荐对话场景使用 `/ws/asr/final`。它在 VAD 判断一句结束后返回最终文本，不发送实时中间字幕。
+
 ```javascript
 async function startRealtimeAsr(pcmStream) {
-  const ws = new WebSocket('ws://localhost:40302/ws/asr/transcribe');
+  const ws = new WebSocket('ws://localhost:40302/ws/asr/final');
   ws.binaryType = 'arraybuffer';
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
-
-    if (data.type === 'result' && data.is_interim) {
-      console.log('实时片段:', data.text);
-    }
 
     if (data.type === 'result' && !data.is_interim) {
       console.log('最终段落:', data.text);
@@ -738,10 +736,12 @@ async function startRealtimeAsr(pcmStream) {
 
 实时接口只接收裸 PCM 二进制，不接收 mp3/wav/m4a 文件块。final 结果会由后端自动补标点。
 
-如果 WebSocket 握手返回 `403 Forbidden`，但 `GET /health` 和 `/docs` 正常，优先确认服务端已经部署最新后端代码并重启 PM2。当前版本的 `/ws/asr/transcribe` 不做 token 鉴权、不限制 Origin；正确启动后握手日志应显示 `[accepted]`，连接成功后第一条消息为：
+如果需要边说边显示字幕，可以把地址换成 `ws://localhost:40302/ws/asr/transcribe`，它会额外返回 `is_interim=true` 的实时片段。
+
+如果 WebSocket 握手返回 `403 Forbidden`，但 `GET /health` 和 `/docs` 正常，优先确认服务端已经部署最新后端代码并重启 PM2。当前版本的 `/ws/asr/final` 和 `/ws/asr/transcribe` 不做 token 鉴权、不限制 Origin；正确启动后握手日志应显示 `[accepted]`，连接成功后第一条消息为：
 
 ```json
-{"type":"connection","status":"connected","message":"2-pass 流式识别已就绪"}
+{"type":"connection","status":"connected","message":"VAD final 识别已就绪"}
 ```
 
 ### 角色管理
