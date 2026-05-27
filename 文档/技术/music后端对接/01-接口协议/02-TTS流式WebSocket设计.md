@@ -1,10 +1,12 @@
-# TTS 流式 WebSocket 设计
+# TTS 流式 WebSocket
+
+状态：已实现并在远程服务 `10.8.0.4:40302` 通过端到端测试。
 
 目标：支持调用方把长文本或 LLM 流式 delta 发给 GSV，GSV 后端负责缓冲、切句、排队合成，并通过同一个 WebSocket 按顺序返回音频块。
 
 ## 1. 接口定位
 
-新增接口：
+接口：
 
 ```text
 ws://host:40302/ws/tts/stream
@@ -57,11 +59,12 @@ ws://host:40302/ws/tts/stream
 {
   "type": "ready",
   "request_id": "chat-001",
-  "sample_rate": 32000,
   "format": "pcm_s16le",
   "channels": 1
 }
 ```
+
+注意：`ready` 表示角色、情感和模型已准备好；实际采样率在每个 `audio_start` 事件里返回。
 
 ### 3.2 text_delta
 
@@ -163,7 +166,9 @@ binary pcm_s16le chunk
 {
   "type": "audio_end",
   "request_id": "chat-001",
-  "seq": 1
+  "seq": 1,
+  "sample_rate": 32000,
+  "bytes": 175360
 }
 ```
 
@@ -215,7 +220,7 @@ buffer += delta
 
 ## 6. 后端内部结构
 
-建议新增：
+已新增：
 
 ```text
 Code/FastApi/Base/TTS/consumers/stream.py
@@ -233,7 +238,7 @@ Code/FastApi/Base/TTS/streaming/protocol.py
 | `segmenter.py` | 文本 delta 缓冲和切句 |
 | `protocol.py` | 消息类型、校验、错误响应 |
 
-`InferenceService` 增加一个流式方法：
+`InferenceService` 已增加流式方法：
 
 ```python
 def stream_inference(self, request: InferenceRequest):
@@ -261,7 +266,7 @@ WebSocket consumer 负责把 `float32/int16 ndarray` 转成 `pcm_s16le bytes` �
 6. 用情感文本或角色 `prompt_text` 作为 `prompt_text`
 7. 调 `service.load_models(...)`
 
-这段逻辑后续应抽成公共函数，避免 HTTP 和 WS 各写一份。
+当前实现已经复用同一套角色、情感、模型和参考音频解析规则；后续可继续把 HTTP 与 WS 中重复的校验代码抽成公共函数。
 
 ## 8. 并发与顺序
 
@@ -308,14 +313,65 @@ Node/Python 客户端可以直接送播放器或写入 PCM/WAV。
 
 ## 10. 第一阶段实现范围
 
-第一阶段只做最小闭环：
+第一阶段已完成：
 
 1. 新增 `/ws/tts/stream`
 2. 支持 `start/text_delta/text/flush/finish/cancel`
 3. 支持 `role_id + emotion`
 4. 返回 `pcm_s16le` 二进制 chunk
 5. 单连接串行合成
-6. 日志打印 `request_id/seq/text/audio_bytes/duration`
+6. 日志打印 `seq/text/audio_bytes/sample_rate`
+
+## 11. 已验证结果
+
+远程服务：
+
+```text
+ws://10.8.0.4:40302/ws/tts/stream
+```
+
+测试参数：
+
+```json
+{
+  "request_id": "tts-test-001",
+  "role_id": 1922493701,
+  "emotion": "平常",
+  "world_id": 1957021237,
+  "version": "v2ProPlus",
+  "text_language": "zh"
+}
+```
+
+测试文本：
+
+```text
+博士，今天也辛苦了。
+接下来就交给我吧。
+```
+
+返回结果：
+
+```text
+connection
+status: 加载角色与模型
+ready
+audio_start seq=1 sample_rate=32000
+binary pcm chunk x3
+audio_end seq=1 bytes=175360
+audio_start seq=2 sample_rate=32000
+binary pcm chunk x3
+audio_end seq=2 bytes=198400
+end
+```
+
+后端日志：
+
+```text
+流式推理模式已开启
+[WS-TTS] seq=1 text='博士，今天也辛苦了。' bytes=175360 sr=32000
+[WS-TTS] seq=2 text='接下来就交给我吧。' bytes=198400 sr=32000
+```
 
 暂不做：
 
@@ -325,7 +381,7 @@ Node/Python 客户端可以直接送播放器或写入 PCM/WAV。
 - 多片段乱序并发合成
 - 前端浏览器播放器组件
 
-## 11. 后续增强
+## 12. 后续增强
 
 后续可以增加：
 

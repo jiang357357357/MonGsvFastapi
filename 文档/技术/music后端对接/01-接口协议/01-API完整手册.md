@@ -374,7 +374,7 @@ ws://host:40302/ws/tts/stream
 {"type":"audio_start","request_id":"chat-001","seq":1,"text":"博士，今天也辛苦了。","sample_rate":32000,"format":"pcm_s16le","channels":1}
 ```
 
-`audio_start` 后会发送若干二进制音频帧，格式为 `pcm_s16le / mono`。片段结束：
+`ready` 表示模型已准备好；实际采样率以 `audio_start.sample_rate` 为准。`audio_start` 后会发送若干二进制音频帧，格式为 `pcm_s16le / mono`。片段结束：
 
 ```json
 {"type":"audio_end","request_id":"chat-001","seq":1,"sample_rate":32000,"bytes":123456}
@@ -388,6 +388,10 @@ ws://host:40302/ws/tts/stream
 ```
 
 客户端不能把裸 PCM 直接交给 `<audio>` 标签，需要按 `sample_rate/channels/format` 放入播放器队列。
+
+**已验证：**
+
+远程 `10.8.0.4:40302` 使用 `role_id=1922493701`、`emotion=平常` 测试通过。两段文本返回 2 个音频片段、6 个二进制 PCM 块，总计 `373760` bytes。
 
 ### POST /inference/models/load
 
