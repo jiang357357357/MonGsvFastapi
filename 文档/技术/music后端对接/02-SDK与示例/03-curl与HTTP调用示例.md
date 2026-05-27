@@ -82,6 +82,7 @@ curl -X POST "http://localhost:40302/api/synthesis/role-emotion" \
     "text_language": "zh",
     "speed": 1.0,
     "how_to_cut": "凑四句一切",
+    "use_cuda_graph": false,
     "return_base64": true
   }' \
   -o tts_response.json
@@ -151,9 +152,12 @@ curl -X POST "http://localhost:40302/inference/tts" \
   -F "temperature=0.6" \
   -F "speed=1.0" \
   -F "sample_steps=8" \
+  -F "use_cuda_graph=false" \
   -F "return_base64=true" \
   -o tts_response.json
 ```
+
+`use_cuda_graph=true` 只建议在 CUDA 服务端、普通非流式单条推理时开启。失败时后端会打印 `[cuda-graph]` 日志并自动回退普通推理。
 
 解析结果保存音频：
 
@@ -733,6 +737,12 @@ async function startRealtimeAsr(pcmStream) {
 ```
 
 实时接口只接收裸 PCM 二进制，不接收 mp3/wav/m4a 文件块。final 结果会由后端自动补标点。
+
+如果 WebSocket 握手返回 `403 Forbidden`，但 `GET /health` 和 `/docs` 正常，优先确认服务端已经部署最新后端代码并重启 PM2。当前版本的 `/ws/asr/transcribe` 不做 token 鉴权、不限制 Origin；正确启动后握手日志应显示 `[accepted]`，连接成功后第一条消息为：
+
+```json
+{"type":"connection","status":"connected","message":"2-pass 流式识别已就绪"}
+```
 
 ### 角色管理
 

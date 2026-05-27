@@ -69,6 +69,12 @@ audio_path|speaker|language|text
 ws://host:40302/ws/asr/transcribe
 ```
 
+连接成功后，后端会立即返回：
+
+```json
+{"type":"connection","status":"connected","message":"2-pass 流式识别已就绪"}
+```
+
 音频输入要求：
 
 | 项 | 要求 |
@@ -122,6 +128,25 @@ ws://host:40302/ws/asr/transcribe
   "message": "录音结束",
   "final_text": "完整最终文本，带标点。"
 }
+```
+
+### 403 握手排查
+
+当前 `/ws/asr/transcribe` 不做 token 鉴权，也不限制 Origin。若 `GET /health`、`/docs` 正常，但 WebSocket 握手返回 `HTTP 403 Forbidden`，同时普通 HTTP GET `/ws/asr/transcribe` 返回 `404 Not Found`，通常不是 MonCore 代理链路问题，而是 GSV 后端没有跑到正确的 WebSocket 路由。
+
+优先检查：
+
+```bash
+grep -RIn "ws/asr/transcribe\\|websocket: WebSocket" Code/FastApi/Base/Gateway
+pm2 describe MonGsvBackend
+pm2 logs MonGsvBackend --lines 80 --nostream
+```
+
+正确的 PM2 后端应启动统一网关入口，并且握手日志应显示：
+
+```text
+"WebSocket /ws/asr/transcribe" [accepted]
+connection open
 ```
 
 ---

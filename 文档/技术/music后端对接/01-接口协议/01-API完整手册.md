@@ -284,6 +284,7 @@ CNHuBERT 语义编码。
 | `ref_free` | bool | 否 | `false` | 无参考模式 |
 | `if_freeze` | bool | 否 | `false` | 冻结缓存 |
 | `pause_second` | float | 否 | `0.3` | 句间停顿(秒) |
+| `use_cuda_graph` | bool | 否 | `false` | 尝试使用 CUDA Graph 加速普通非流式推理；仅 CUDA、单条普通推理时启用，失败会自动回退 |
 | `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
 
 **后端内部解析规则：**
@@ -306,7 +307,8 @@ CNHuBERT 语义编码。
   "text": "博士，今天也辛苦了。",
   "text_language": "zh",
   "speed": 1.0,
-  "how_to_cut": "凑四句一切"
+  "how_to_cut": "凑四句一切",
+  "use_cuda_graph": false
 }
 ```
 
@@ -382,6 +384,7 @@ CNHuBERT 语义编码。
 | `ref_free` | bool | 否 | `false` | 无参考模式 |
 | `if_freeze` | bool | 否 | `false` | 冻结缓存 |
 | `pause_second` | float | 否 | `0.3` | 句间停顿(秒) |
+| `use_cuda_graph` | bool | 否 | `false` | 尝试使用 CUDA Graph 加速普通非流式推理；仅 CUDA、单条普通推理时启用，失败会自动回退 |
 | `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
 
 **how_to_cut 可选值：**
@@ -394,6 +397,10 @@ CNHuBERT 语义编码。
 
 **text_language 可选值：**
 `auto`, `auto_yue`, `zh`, `en`, `ja`, `yue`, `ko`, `all_zh`, `all_ja`, `all_yue`, `all_ko`
+
+**CUDA Graph 说明：**
+
+`use_cuda_graph=true` 只影响 T2S 语义 token 预测阶段。当前实现为安全可选能力：只有在 `cuda + 非 streaming + 非 ref_free + 单条普通推理` 时尝试启用；初始化或推理失败时后端会输出 `[cuda-graph]` 日志并自动回退普通推理。
 
 **响应示例（return_base64=true）：**
 ```json
@@ -548,6 +555,8 @@ ASR 驻留清理。
 ws://host:40302/ws/asr/transcribe
 ```
 
+连接成功后，服务端会立即返回 `type=connection` 的 JSON 消息。该路由不做 token 鉴权，也不限制 Origin。
+
 音频输入必须是裸 PCM 二进制：
 
 | 项 | 要求 |
@@ -615,6 +624,13 @@ ws://host:40302/ws/asr/transcribe
   "final_text": "完整最终文本，带标点。"
 }
 ```
+
+**握手排查：**
+
+| 现象 | 优先检查 |
+|------|----------|
+| WebSocket 握手返回 `403 Forbidden`，HTTP GET 同路径返回 `404` | 后端是否已部署包含 `websocket: WebSocket` 类型标注的版本；PM2 是否跑的是 `Code/FastApi/Main/run_gateway.py start --host 0.0.0.0 --port 40302 --no-reload`；前置代理是否转发 `Upgrade` |
+| 连接成功但没有识别结果 | 是否发送了 `{"command":"start"}`；音频是否为 `16kHz/mono/signed int16/little-endian` 裸 PCM |
 
 注意：不要向该接口发送 mp3/wav/m4a 文件块。浏览器或后端调用方需要先解码并转成 `16k mono int16 PCM`。
 
