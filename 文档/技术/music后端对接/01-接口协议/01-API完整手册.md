@@ -334,6 +334,61 @@ CNHuBERT 语义编码。
 | `400` | `当前情感缺少参考音频` | 情感配置没有可用参考音频 |
 | `400` | `模型加载失败` | 模型路径无效或权重加载失败 |
 
+### WebSocket /ws/tts/stream
+
+流式文本转语音。适合 LLM delta、长文本和实时对话场景。调用方发送文本流，后端按标点、长度和 flush/finish 切成 TTS 片段，并按顺序返回音频块。
+
+**连接地址：**
+
+```text
+ws://host:40302/ws/tts/stream
+```
+
+**start：**
+
+```json
+{
+  "type": "start",
+  "request_id": "chat-001",
+  "role_id": 1,
+  "emotion": "温柔",
+  "world_id": 1,
+  "version": "v2ProPlus",
+  "text_language": "zh",
+  "speed": 1.0
+}
+```
+
+**文本输入：**
+
+```json
+{"type":"text_delta","request_id":"chat-001","text":"博士，"}
+{"type":"text_delta","request_id":"chat-001","text":"今天也辛苦了。"}
+{"type":"finish","request_id":"chat-001"}
+```
+
+**服务端事件：**
+
+```json
+{"type":"ready","request_id":"chat-001","format":"pcm_s16le","channels":1}
+{"type":"audio_start","request_id":"chat-001","seq":1,"text":"博士，今天也辛苦了。","sample_rate":32000,"format":"pcm_s16le","channels":1}
+```
+
+`audio_start` 后会发送若干二进制音频帧，格式为 `pcm_s16le / mono`。片段结束：
+
+```json
+{"type":"audio_end","request_id":"chat-001","seq":1,"sample_rate":32000,"bytes":123456}
+{"type":"end","request_id":"chat-001"}
+```
+
+取消：
+
+```json
+{"type":"cancel","request_id":"chat-001"}
+```
+
+客户端不能把裸 PCM 直接交给 `<audio>` 标签，需要按 `sample_rate/channels/format` 放入播放器队列。
+
 ### POST /inference/models/load
 
 加载推理模型。
