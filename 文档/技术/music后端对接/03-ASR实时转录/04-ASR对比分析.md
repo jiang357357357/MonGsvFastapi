@@ -73,7 +73,7 @@ ws://host:40302/ws/asr/final
 连接成功后，后端会立即返回：
 
 ```json
-{"type":"connection","status":"connected","message":"VAD final 识别已就绪"}
+{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-v1"}
 ```
 
 `/ws/asr/final` 使用 VAD 判断一句话结束，然后把该段 PCM 送入 final ASR。它会保留约 1.2 秒前置音频，避免 VAD 从 `speech=false` 切到 `speech=true` 之前的开头人声被丢弃。
@@ -94,14 +94,37 @@ ws://host:40302/ws/asr/final
 1. 建立 WebSocket
 2. 发送 {"command":"start"}
 3. 持续发送 PCM int16 二进制帧
-4. 接收 is_interim=true 的实时片段
-5. 结束时发送 {"command":"stop"}
-6. 接收 final_text
+4. 持续接收 audio_state / voice_activity
+5. VAD 断句后接收 result / commit_hint
+6. 结束时发送 {"command":"stop"}
+7. 接收 final_text
 ```
 
 对 `/ws/asr/final`，第 4 步不会返回 interim，而是在 VAD 断句后返回 `is_interim=false` 的最终段落。只有需要“边说边显示”的字幕体验时，才使用 `/ws/asr/transcribe`。
 
-返回实时片段：
+音频状态：
+
+```json
+{
+  "type": "audio_state",
+  "input_level": 0.42,
+  "noise_level": 0.08,
+  "clipping": false
+}
+```
+
+人声活动：
+
+```json
+{
+  "type": "voice_activity",
+  "is_speech": true,
+  "silence_ms": 0,
+  "speech_ms": 1200
+}
+```
+
+`/ws/asr/transcribe` 返回实时片段：
 
 ```json
 {
@@ -124,6 +147,19 @@ ws://host:40302/ws/asr/final
   "sentence_end": true
 }
 ```
+
+提交建议：
+
+```json
+{
+  "type": "commit_hint",
+  "reason": "silence",
+  "should_commit": true,
+  "final_text": "完整最终文本，带标点。"
+}
+```
+
+`commit_hint` 不直接代表发送聊天消息，只表示 GSV 建议 MonCore/前端可以提交。
 
 停止后返回：
 

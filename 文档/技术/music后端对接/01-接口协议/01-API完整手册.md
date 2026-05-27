@@ -625,7 +625,13 @@ ws://host:40302/ws/asr/final
 {
   "type": "connection",
   "status": "connected",
-  "message": "VAD final 识别已就绪"
+  "message": "VAD final STT 已就绪",
+  "protocol": "vad-final-v1",
+  "audio_format": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "sample_format": "s16le"
+  }
 }
 ```
 
@@ -637,9 +643,32 @@ ws://host:40302/ws/asr/final
 1. 建立 WebSocket
 2. 发送 {"command":"start"}
 3. 持续发送 PCM int16 二进制帧
-4. VAD 判断一句结束后接收 is_interim=false 的 result
-5. 结束时发送 {"command":"stop"}
-6. 接收 final_text
+4. 持续接收 audio_state 和 voice_activity
+5. VAD 判断一句结束后接收 result 和 commit_hint
+6. 结束时发送 {"command":"stop"}
+7. 接收 final_text
+```
+
+音频状态事件：
+
+```json
+{
+  "type": "audio_state",
+  "input_level": 0.42,
+  "noise_level": 0.08,
+  "clipping": false
+}
+```
+
+人声活动事件：
+
+```json
+{
+  "type": "voice_activity",
+  "is_speech": true,
+  "silence_ms": 0,
+  "speech_ms": 1200
+}
 ```
 
 最终段落响应：
@@ -660,6 +689,46 @@ ws://host:40302/ws/asr/final
   "speaker_is_known": null
 }
 ```
+
+提交建议响应：
+
+```json
+{
+  "type": "commit_hint",
+  "reason": "silence",
+  "should_commit": true,
+  "final_text": "最终识别文本，带标点。"
+}
+```
+
+`commit_hint` 只表示语音服务建议提交，最终是否发送聊天消息仍由 MonCore/前端决定。
+
+`reason` 可选：
+
+| reason | 含义 |
+|--------|------|
+| `silence` | 检测到人声结束 |
+| `sentence_end` | 文本语义句尾 |
+| `manual_stop` | 用户停止录音 |
+| `timeout` | 太久没有新内容 |
+
+警告响应：
+
+```json
+{
+  "type": "warning",
+  "code": "LOW_VOLUME",
+  "message": "输入音量过低"
+}
+```
+
+常见 `code`：
+
+| code | 含义 |
+|------|------|
+| `NO_SPEECH` | 未检测到有效人声或有效文本 |
+| `LOW_VOLUME` | 输入音量过低 |
+| `AUDIO_FORMAT_UNSUPPORTED` | 音频格式不是 16k mono int16 PCM |
 
 停止响应：
 

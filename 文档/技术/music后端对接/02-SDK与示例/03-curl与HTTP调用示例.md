@@ -710,8 +710,24 @@ async function startRealtimeAsr(pcmStream) {
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
 
+    if (data.type === 'audio_state') {
+      console.log('输入音量:', data.input_level, '噪声:', data.noise_level, '削波:', data.clipping);
+    }
+
+    if (data.type === 'voice_activity') {
+      console.log('人声:', data.is_speech, '静音ms:', data.silence_ms, '人声ms:', data.speech_ms);
+    }
+
     if (data.type === 'result' && !data.is_interim) {
       console.log('最终段落:', data.text);
+    }
+
+    if (data.type === 'commit_hint' && data.should_commit) {
+      console.log('建议提交:', data.reason, data.final_text);
+    }
+
+    if (data.type === 'warning') {
+      console.warn(data.code, data.message);
     }
 
     if (data.type === 'status' && data.final_text !== undefined) {
@@ -741,7 +757,7 @@ async function startRealtimeAsr(pcmStream) {
 如果 WebSocket 握手返回 `403 Forbidden`，但 `GET /health` 和 `/docs` 正常，优先确认服务端已经部署最新后端代码并重启 PM2。当前版本的 `/ws/asr/final` 和 `/ws/asr/transcribe` 不做 token 鉴权、不限制 Origin；正确启动后握手日志应显示 `[accepted]`，连接成功后第一条消息为：
 
 ```json
-{"type":"connection","status":"connected","message":"VAD final 识别已就绪"}
+{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-v1"}
 ```
 
 ### 角色管理
