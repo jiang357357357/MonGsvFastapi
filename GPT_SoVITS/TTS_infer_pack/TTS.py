@@ -426,6 +426,7 @@ class TTS:
             self.configs: TTS_Config = TTS_Config(configs)
 
         self.t2s_model: Text2SemanticLightningModule = None
+        self.t2s_model_cudagraph = None
         self.vits_model: Union[SynthesizerTrn, SynthesizerTrnV3] = None
         self.bert_tokenizer: AutoTokenizer = None
         self.bert_model: AutoModelForMaskedLM = None
@@ -499,7 +500,7 @@ class TTS:
 
         if if_lora_v3 == True and os.path.exists(path_sovits) == False:
             info = path_sovits + i18n("SoVITS %s 底模缺失，无法加载相应 LoRA 权重" % model_version)
-            raise FileExistsError(info)
+            raise FileNotFoundError(info)
 
         # dict_s2 = torch.load(weights_path, map_location=self.configs.device,weights_only=False)
         dict_s2 = load_sovits_new(weights_path)
@@ -594,6 +595,7 @@ class TTS:
     def init_t2s_weights(self, weights_path: str):
         print(f"Loading Text2Semantic weights from {weights_path}")
         self.configs.t2s_weights_path = weights_path
+        self.t2s_model_cudagraph = None
         self.configs.save_configs()
         self.configs.hz = 50
         dict_s1 = torch.load(weights_path, map_location=self.configs.device, weights_only=False)
@@ -994,6 +996,70 @@ class TTS:
         """
         self.stop_flag = True
 
+    def _try_cuda_graph_t2s(
+        self,
+        all_phoneme_ids,
+        all_phoneme_lens,
+        prompt,
+        all_bert_features,
+        top_k,
+        top_p,
+        temperature,
+        repetition_penalty,
+    ):
+        """尝试使用官方 CUDA Graph T2S 解码，失败时返回 None 走原推理路径。"""
+        if str(self.configs.device) != "cuda" or not torch.cuda.is_available():
+            return None, None
+        if prompt is None:
+            print("[cuda-graph] ref_free 推理暂不启用 CUDA Graph，回退普通推理")
+            return None, None
+        if len(all_phoneme_ids) != 1 or len(all_bert_features) != 1:
+            print("[cuda-graph] 当前仅支持单条普通推理，回退普通推理")
+            return None, None
+
+        try:
+            from AR.models.structs_cudagraph import T2SRequest
+            from AR.models.t2s_model_cudagraph import CUDAGraphRunner
+
+            if self.t2s_model_cudagraph is None:
+                dtype = torch.float16 if self.configs.is_half and str(self.configs.device) != "cpu" else torch.float32
+                self.t2s_model_cudagraph = CUDAGraphRunner(
+                    CUDAGraphRunner.load_decoder(self.configs.t2s_weights_path),
+                    torch.device(self.configs.device),
+                    dtype,
+                )
+
+            t2s_request = T2SRequest(
+                all_phoneme_ids,
+                all_phoneme_lens,
+                prompt,
+                all_bert_features,
+                valid_length=1,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+                early_stop_num=self.configs.hz * self.configs.max_sec,
+                repetition_penalty=repetition_penalty,
+                use_cuda_graph=True,
+            )
+            t2s_result = self.t2s_model_cudagraph.generate(t2s_request)
+            if t2s_result.exception is not None:
+                print(f"[cuda-graph] T2S 推理失败，回退普通推理: {t2s_result.exception}")
+                if t2s_result.traceback:
+                    print(t2s_result.traceback)
+                return None, None
+
+            pred_semantic_list = t2s_result.result or []
+            if len(pred_semantic_list) != 1:
+                print("[cuda-graph] 返回结果数量异常，回退普通推理")
+                return None, None
+            idx_list = [item.shape[0] for item in pred_semantic_list]
+            print(f"[cuda-graph] T2S 推理完成: infer_speed={t2s_result.infer_speed:.2f}")
+            return pred_semantic_list, idx_list
+        except Exception as exc:
+            print(f"[cuda-graph] 初始化或推理失败，回退普通推理: {exc}")
+            return None, None
+
     @torch.no_grad()
     def run(self, inputs: dict):
         """
@@ -1024,6 +1090,7 @@ class TTS:
                     "super_sampling": False,      # bool. whether to use super-sampling for audio when using VITS model V3.
                     "return_fragment": False,     # bool. step by step return the audio fragment. (Best Quality, Slowest response speed. old version of streaming mode)
                     "streaming_mode": False,      # bool. return audio chunk by chunk. (Medium quality, Slow response speed)
+                    "use_cuda_graph": False,      # bool. use CUDA Graph T2S decoder in normal non-streaming inference when available.
                     "overlap_length": 2,          # int. overlap length of semantic tokens for streaming mode.
                     "min_chunk_length": 16,        # int. The minimum chunk length of semantic tokens for streaming mode. (affects audio chunk size)
                     "fixed_length_chunk": False,  # bool. When turned on, it can achieve faster streaming response, but with lower quality. (lower quality, faster response speed)
@@ -1057,6 +1124,7 @@ class TTS:
         sample_steps = inputs.get("sample_steps", 32)
         super_sampling = inputs.get("super_sampling", False)
         streaming_mode = inputs.get("streaming_mode", False)
+        use_cuda_graph = inputs.get("use_cuda_graph", False)
         overlap_length = inputs.get("overlap_length", 2)
         min_chunk_length = inputs.get("min_chunk_length", 16)
         fixed_length_chunk = inputs.get("fixed_length_chunk", False)
@@ -1265,19 +1333,33 @@ class TTS:
 
                 if not streaming_mode:
                     print(f"############ {i18n('预测语义Token')} ############")
-                    pred_semantic_list, idx_list = self.t2s_model.model.infer_panel(
-                        all_phoneme_ids,
-                        all_phoneme_lens,
-                        prompt,
-                        all_bert_features,
-                        # prompt_phone_len=ph_offset,
-                        top_k=top_k,
-                        top_p=top_p,
-                        temperature=temperature,
-                        early_stop_num=self.configs.hz * self.configs.max_sec,
-                        max_len=max_len,
-                        repetition_penalty=repetition_penalty,
-                    )
+                    pred_semantic_list = None
+                    idx_list = None
+                    if use_cuda_graph:
+                        pred_semantic_list, idx_list = self._try_cuda_graph_t2s(
+                            all_phoneme_ids,
+                            all_phoneme_lens,
+                            prompt,
+                            all_bert_features,
+                            top_k,
+                            top_p,
+                            temperature,
+                            repetition_penalty,
+                        )
+                    if pred_semantic_list is None or idx_list is None:
+                        pred_semantic_list, idx_list = self.t2s_model.model.infer_panel(
+                            all_phoneme_ids,
+                            all_phoneme_lens,
+                            prompt,
+                            all_bert_features,
+                            # prompt_phone_len=ph_offset,
+                            top_k=top_k,
+                            top_p=top_p,
+                            temperature=temperature,
+                            early_stop_num=self.configs.hz * self.configs.max_sec,
+                            max_len=max_len,
+                            repetition_penalty=repetition_penalty,
+                        )
                     t4 = time.perf_counter()
                     t_34 += t4 - t3
 
@@ -1578,16 +1660,15 @@ class TTS:
                 max_audio = np.abs(audio).max()
                 if max_audio > 1:
                     audio /= max_audio
-            audio = (audio * 32768).astype(np.int16)
+                audio = (audio * 32768).astype(np.int16)
+            else:
+                audio = audio.cpu().numpy()
+                audio = (audio * 32768).astype(np.int16)
             t2 = time.perf_counter()
             print(f"超采样用时：{t2 - t1:.3f}s")
         else:
-            # audio = audio.float() * 32768
-            # audio = audio.to(dtype=torch.int16).clamp(-32768, 32767).cpu().numpy()
-
             audio = audio.cpu().numpy()
-
-        audio = (audio * 32768).astype(np.int16)
+            audio = (audio * 32768).astype(np.int16)
 
 
         # try:
@@ -1768,7 +1849,10 @@ class TTS:
             pos += chunk_len * upsample_rate
 
         audio = self.sola_algorithm(audio_fragments, overlapped_len * upsample_rate)
-        audio = audio[overlapped_len * upsample_rate : -padding_len * upsample_rate]
+        if padding_len > 0:
+            audio = audio[overlapped_len * upsample_rate : -padding_len * upsample_rate]
+        else:
+            audio = audio[overlapped_len * upsample_rate :]
 
         audio_fragments = []
         for feat_len in feat_lens:
