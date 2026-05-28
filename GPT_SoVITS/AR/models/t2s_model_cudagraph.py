@@ -153,7 +153,10 @@ class Attention(nn.Module):
         k_out = k_cache.transpose(1, 2)  # [B, H, max_seq, D]
         v_out = v_cache.transpose(1, 2)  # [B, H, max_seq, D]
 
-        attn = F.scaled_dot_product_attention(q, k_out, v_out)
+        cache_pos = torch.arange(k_out.size(-2), device=input_pos.device)
+        attn_mask = cache_pos.unsqueeze(0) < input_pos.unsqueeze(1)
+        attn_mask = attn_mask[:, None, None, :]
+        attn = F.scaled_dot_product_attention(q, k_out, v_out, attn_mask=attn_mask)
 
         attn = self.dropout.forward(attn)
         attn = attn.transpose(1, 2).reshape(bsz, seqlen, self.hidden_dim)
@@ -503,7 +506,7 @@ class CUDAGraphRunner:
                 logits = decoder.ar_predict_layer(xy_dec[:, -1])
                 self.input_pos.add_(1)
 
-                if idx == 0:
+                if idx < 11:
                     logits[:, -1] = float("-inf")
 
                 samples = session.sampler.sample(

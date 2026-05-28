@@ -1006,6 +1006,7 @@ class TTS:
         top_p,
         temperature,
         repetition_penalty,
+        cuda_graph_mode,
     ):
         """尝试使用官方 CUDA Graph T2S 解码，失败时返回 None 走原推理路径。"""
         if str(self.configs.device) != "cuda" or not torch.cuda.is_available():
@@ -1016,17 +1017,28 @@ class TTS:
         if len(all_phoneme_ids) != 1 or len(all_bert_features) != 1:
             print("[cuda-graph] 当前仅支持单条普通推理，回退普通推理")
             return None, None
+        if cuda_graph_mode not in {"graph", "decoder_only"}:
+            print(f"[cuda-graph] 未知模式 {cuda_graph_mode!r}，回退普通推理")
+            return None, None
 
         try:
             from AR.models.structs_cudagraph import T2SRequest
             from AR.models.t2s_model_cudagraph import CUDAGraphRunner
 
             if self.t2s_model_cudagraph is None:
+                cuda_graph_load_started_at = time.perf_counter()
                 dtype = torch.float16 if self.configs.is_half and str(self.configs.device) != "cpu" else torch.float32
                 self.t2s_model_cudagraph = CUDAGraphRunner(
                     CUDAGraphRunner.load_decoder(self.configs.t2s_weights_path),
                     torch.device(self.configs.device),
                     dtype,
+                )
+                print(
+                    "[cuda-graph] T2S 解码器已加载: "
+                    f"elapsed={time.perf_counter() - cuda_graph_load_started_at:.3f}s, "
+                    f"dtype={dtype}, "
+                    f"device={self.configs.device}",
+                    flush=True,
                 )
 
             t2s_request = T2SRequest(
@@ -1040,8 +1052,9 @@ class TTS:
                 temperature=temperature,
                 early_stop_num=self.configs.hz * self.configs.max_sec,
                 repetition_penalty=repetition_penalty,
-                use_cuda_graph=True,
+                use_cuda_graph=(cuda_graph_mode == "graph"),
             )
+            print(f"[cuda-graph] T2S 推理模式: {cuda_graph_mode}")
             t2s_result = self.t2s_model_cudagraph.generate(t2s_request)
             if t2s_result.exception is not None:
                 print(f"[cuda-graph] T2S 推理失败，回退普通推理: {t2s_result.exception}")
@@ -1091,6 +1104,7 @@ class TTS:
                     "return_fragment": False,     # bool. step by step return the audio fragment. (Best Quality, Slowest response speed. old version of streaming mode)
                     "streaming_mode": False,      # bool. return audio chunk by chunk. (Medium quality, Slow response speed)
                     "use_cuda_graph": False,      # bool. use CUDA Graph T2S decoder in normal non-streaming inference when available.
+                    "cuda_graph_mode": "graph",   # str. "graph" enables replay, "decoder_only" uses the same decoder without graph capture.
                     "overlap_length": 2,          # int. overlap length of semantic tokens for streaming mode.
                     "min_chunk_length": 16,        # int. The minimum chunk length of semantic tokens for streaming mode. (affects audio chunk size)
                     "fixed_length_chunk": False,  # bool. When turned on, it can achieve faster streaming response, but with lower quality. (lower quality, faster response speed)
@@ -1125,6 +1139,7 @@ class TTS:
         super_sampling = inputs.get("super_sampling", False)
         streaming_mode = inputs.get("streaming_mode", False)
         use_cuda_graph = inputs.get("use_cuda_graph", False)
+        cuda_graph_mode = inputs.get("cuda_graph_mode", "graph")
         overlap_length = inputs.get("overlap_length", 2)
         min_chunk_length = inputs.get("min_chunk_length", 16)
         fixed_length_chunk = inputs.get("fixed_length_chunk", False)
@@ -1345,6 +1360,7 @@ class TTS:
                             top_p,
                             temperature,
                             repetition_penalty,
+                            cuda_graph_mode,
                         )
                     if pred_semantic_list is None or idx_list is None:
                         pred_semantic_list, idx_list = self.t2s_model.model.infer_panel(
@@ -1562,7 +1578,15 @@ class TTS:
                 t5 = time.perf_counter()
                 t_45 += t5 - t4
                 if return_fragment:
-                    print("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t4 - t3, t5 - t4))
+                    print(
+                        "[TTS耗时] | 阶段 | 秒 |\n"
+                        f"[TTS耗时] | --- | ---: |\n"
+                        f"[TTS耗时] | 参考音频/提示缓存 | {t1 - t0:.3f} |\n"
+                        f"[TTS耗时] | 文本切分与特征 | {t2 - t1:.3f} |\n"
+                        f"[TTS耗时] | 语义Token推理 | {t4 - t3:.3f} |\n"
+                        f"[TTS耗时] | 声码器合成 | {t5 - t4:.3f} |",
+                        flush=True,
+                    )
                     yield self.audio_postprocess(
                         [batch_audio_fragment],
                         output_sr,
@@ -1581,7 +1605,15 @@ class TTS:
                     return
 
             if not (return_fragment or streaming_mode):
-                print("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t_34, t_45))
+                print(
+                    "[TTS耗时] | 阶段 | 秒 |\n"
+                    f"[TTS耗时] | --- | ---: |\n"
+                    f"[TTS耗时] | 参考音频/提示缓存 | {t1 - t0:.3f} |\n"
+                    f"[TTS耗时] | 文本切分与特征 | {t2 - t1:.3f} |\n"
+                    f"[TTS耗时] | 语义Token推理 | {t_34:.3f} |\n"
+                    f"[TTS耗时] | 声码器合成 | {t_45:.3f} |",
+                    flush=True,
+                )
                 if len(audio) == 0:
                     yield output_sr, np.zeros(int(output_sr), dtype=np.int16)
                     return

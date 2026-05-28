@@ -163,15 +163,14 @@ def build_frontend() -> bool:
     return True
 
 
-def start_backend(host: str, port: int, new_window: bool = False) -> Optional[subprocess.Popen]:
+def start_backend(host: str, port: int) -> Optional[subprocess.Popen]:
     print("[→] 正在启动 FastAPI 后端...")
     print(f"    访问地址: http://{display_host(host)}:{port}/docs")
-    if new_window:
-        print("    日志窗口: 单独控制台")
 
     env = os.environ.copy()
     env["MON_GSV_ENV"] = "production"
     env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
 
     cmd = [
         python_executable(),
@@ -181,17 +180,9 @@ def start_backend(host: str, port: int, new_window: bool = False) -> Optional[su
         host,
         "--port",
         str(port),
-        "--no-reload",
     ]
 
     try:
-        if new_window and os.name == "nt":
-            return subprocess.Popen(
-                cmd,
-                cwd=str(PROJECT_ROOT),
-                env=env,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-            )
         return subprocess.Popen(
             cmd,
             cwd=str(PROJECT_ROOT),
@@ -259,20 +250,13 @@ def enqueue_output(process: subprocess.Popen, name: str, output_queue: queue.Que
     output_queue.put((name, None))
 
 
-def monitor_processes(processes: dict[str, subprocess.Popen], verbose: bool = False) -> None:
-    key_words = [
-        "Uvicorn running",
-        "Application startup complete",
-        "MonHub",
-        "Local:",
-        "Network:",
-        "ready",
-        "error",
-        "failed",
-        "错误",
-        "失败",
-        "端口",
-    ]
+def monitor_processes(
+    processes: dict[str, subprocess.Popen],
+    host: str,
+    backend_port: int,
+    frontend_port: Optional[int] = None,
+    verbose: bool = False,
+) -> None:
     output_queue: queue.Queue = queue.Queue()
     for name, process in processes.items():
         threading.Thread(
@@ -283,9 +267,8 @@ def monitor_processes(processes: dict[str, subprocess.Popen], verbose: bool = Fa
 
     print("\n" + "-" * 70)
     print("服务运行中...")
-    if not verbose:
-        print("(使用 --verbose 查看详细输出)")
-    print("-" * 70 + "\n")
+    print("=" * 70)
+    backend_ready = False
 
     try:
         while processes:
@@ -300,8 +283,19 @@ def monitor_processes(processes: dict[str, subprocess.Popen], verbose: bool = Fa
                 continue
             if line is None:
                 continue
-            if verbose or any(word.lower() in line.lower() for word in key_words):
-                print(f"[{name}] {line}")
+
+            print(f"[{name}] {line}", flush=True)
+
+            if not backend_ready and name == "后端" and "Application startup complete" in line:
+                backend_ready = True
+                print()
+                print("=" * 70)
+                print(f"  后端 API  : http://{display_host(host)}:{backend_port}/docs")
+                print(f"  后端健康  : http://{display_host(host)}:{backend_port}/health")
+                if frontend_port is not None:
+                    print(f"  前端页面  : http://127.0.0.1:{frontend_port}/")
+                print("=" * 70)
+                print()
     except KeyboardInterrupt:
         print("\n[!] 收到停止信号...")
 
@@ -336,7 +330,6 @@ def main() -> int:
     parser.add_argument("--frontend-port", type=int, default=default_frontend_port, help="前端端口号")
     parser.add_argument("--no-frontend", action="store_true", help="不启动前端")
     parser.add_argument("--build", action="store_true", help="启动前先重新编译前端")
-    parser.add_argument("--inline-backend", action="store_true", help="后端日志显示在当前窗口，不单独弹窗")
     parser.add_argument("--verbose", "-v", action="store_true", help="显示详细输出")
     args = parser.parse_args()
 
@@ -346,7 +339,7 @@ def main() -> int:
     print()
 
     processes: dict[str, subprocess.Popen] = {}
-    backend_proc = start_backend(args.host, args.port, new_window=(os.name == "nt" and not args.inline_backend))
+    backend_proc = start_backend(args.host, args.port)
     if not backend_proc:
         return 1
     processes["后端"] = backend_proc
@@ -360,17 +353,16 @@ def main() -> int:
         else:
             print("[!] 前端启动失败，继续运行后端\n")
 
-    print("=" * 70)
-    print("服务访问地址:")
-    print(f"  后端 API : http://{display_host(args.host)}:{args.port}/docs")
-    print(f"  后端健康: http://{display_host(args.host)}:{args.port}/health")
-    if "前端" in processes:
-        print(f"  前端页面: http://127.0.0.1:{args.frontend_port}/")
-    print("=" * 70)
-    print("\n按 Ctrl+C 停止所有服务\n")
+    print()
 
     try:
-        monitor_processes(processes, args.verbose)
+        monitor_processes(
+            processes,
+            host=args.host,
+            backend_port=args.port,
+            frontend_port=args.frontend_port if not args.no_frontend else None,
+            verbose=args.verbose,
+        )
     finally:
         stop_processes(processes)
         print("\n[✓] 所有服务已停止")
