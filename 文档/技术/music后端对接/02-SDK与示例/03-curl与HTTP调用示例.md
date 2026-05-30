@@ -82,7 +82,7 @@ curl -X POST "http://localhost:40302/api/synthesis/role-emotion" \
     "text_language": "zh",
     "speed": 1.0,
     "how_to_cut": "凑四句一切",
-    "use_cuda_graph": false,
+    "inference_mode": "normal",
     "return_base64": true
   }' \
   -o tts_response.json
@@ -152,12 +152,12 @@ curl -X POST "http://localhost:40302/inference/tts" \
   -F "temperature=0.6" \
   -F "speed=1.0" \
   -F "sample_steps=8" \
-  -F "use_cuda_graph=false" \
+  -F "inference_mode=normal" \
   -F "return_base64=true" \
   -o tts_response.json
 ```
 
-`use_cuda_graph=true` 只建议在 CUDA 服务端、普通非流式单条推理时开启。失败时后端会打印 `[cuda-graph]` 日志并自动回退普通推理。
+`inference_mode=normal` 为普通推理。`inference_mode=accelerated` 会尝试启用 CUDA Graph 加速，仅建议在 CUDA 服务端、普通非流式单条推理时开启；失败时后端会打印 `[cuda-graph]` 日志并自动回退普通推理。
 
 解析结果保存音频：
 

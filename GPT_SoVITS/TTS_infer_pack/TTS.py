@@ -1017,7 +1017,7 @@ class TTS:
         if len(all_phoneme_ids) != 1 or len(all_bert_features) != 1:
             print("[cuda-graph] 当前仅支持单条普通推理，回退普通推理")
             return None, None
-        if cuda_graph_mode not in {"graph", "decoder_only"}:
+        if cuda_graph_mode != "graph":
             print(f"[cuda-graph] 未知模式 {cuda_graph_mode!r}，回退普通推理")
             return None, None
 
@@ -1052,7 +1052,7 @@ class TTS:
                 temperature=temperature,
                 early_stop_num=self.configs.hz * self.configs.max_sec,
                 repetition_penalty=repetition_penalty,
-                use_cuda_graph=(cuda_graph_mode == "graph"),
+                use_cuda_graph=True,
             )
             print(f"[cuda-graph] T2S 推理模式: {cuda_graph_mode}")
             t2s_result = self.t2s_model_cudagraph.generate(t2s_request)
@@ -1104,7 +1104,7 @@ class TTS:
                     "return_fragment": False,     # bool. step by step return the audio fragment. (Best Quality, Slowest response speed. old version of streaming mode)
                     "streaming_mode": False,      # bool. return audio chunk by chunk. (Medium quality, Slow response speed)
                     "use_cuda_graph": False,      # bool. use CUDA Graph T2S decoder in normal non-streaming inference when available.
-                    "cuda_graph_mode": "graph",   # str. "graph" enables replay, "decoder_only" uses the same decoder without graph capture.
+                    "cuda_graph_mode": "graph",   # str. "graph" enables CUDA Graph replay.
                     "overlap_length": 2,          # int. overlap length of semantic tokens for streaming mode.
                     "min_chunk_length": 16,        # int. The minimum chunk length of semantic tokens for streaming mode. (affects audio chunk size)
                     "fixed_length_chunk": False,  # bool. When turned on, it can achieve faster streaming response, but with lower quality. (lower quality, faster response speed)

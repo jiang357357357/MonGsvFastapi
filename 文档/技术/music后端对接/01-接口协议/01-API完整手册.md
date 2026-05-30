@@ -284,7 +284,7 @@ CNHuBERT 语义编码。
 | `ref_free` | bool | 否 | `false` | 无参考模式 |
 | `if_freeze` | bool | 否 | `false` | 冻结缓存 |
 | `pause_second` | float | 否 | `0.3` | 句间停顿(秒) |
-| `use_cuda_graph` | bool | 否 | `false` | 尝试使用 CUDA Graph 加速普通非流式推理；仅 CUDA、单条普通推理时启用，失败会自动回退 |
+| `inference_mode` | string | 否 | `"normal"` | 推理模式：`normal` 普通推理，`accelerated` 加速推理 |
 | `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
 
 **后端内部解析规则：**
@@ -308,7 +308,7 @@ CNHuBERT 语义编码。
   "text_language": "zh",
   "speed": 1.0,
   "how_to_cut": "凑四句一切",
-  "use_cuda_graph": false
+  "inference_mode": "normal"
 }
 ```
 
@@ -443,7 +443,7 @@ ws://host:40302/ws/tts/stream
 | `ref_free` | bool | 否 | `false` | 无参考模式 |
 | `if_freeze` | bool | 否 | `false` | 冻结缓存 |
 | `pause_second` | float | 否 | `0.3` | 句间停顿(秒) |
-| `use_cuda_graph` | bool | 否 | `false` | 尝试使用 CUDA Graph 加速普通非流式推理；仅 CUDA、单条普通推理时启用，失败会自动回退 |
+| `inference_mode` | string | 否 | `"normal"` | 推理模式：`normal` 普通推理，`accelerated` 加速推理 |
 | `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
 
 **how_to_cut 可选值：**
@@ -457,9 +457,11 @@ ws://host:40302/ws/tts/stream
 **text_language 可选值：**
 `auto`, `auto_yue`, `zh`, `en`, `ja`, `yue`, `ko`, `all_zh`, `all_ja`, `all_yue`, `all_ko`
 
-**CUDA Graph 说明：**
+**推理模式说明：**
 
-`use_cuda_graph=true` 只影响 T2S 语义 token 预测阶段。当前实现为安全可选能力：只有在 `cuda + 非 streaming + 非 ref_free + 单条普通推理` 时尝试启用；初始化或推理失败时后端会输出 `[cuda-graph]` 日志并自动回退普通推理。
+`inference_mode=normal` 使用普通推理，是默认值。`inference_mode=accelerated` 会尝试使用 CUDA Graph 加速 T2S 语义 token 预测阶段，仅建议在 CUDA 服务端、非 streaming、非 ref_free、单条普通推理时启用；初始化或推理失败时后端会输出 `[cuda-graph]` 日志并自动回退普通推理。
+
+旧字段 `use_cuda_graph` 和 `cuda_graph_mode` 已废弃，不再作为外部接口参数使用。
 
 **响应示例（return_base64=true）：**
 ```json
