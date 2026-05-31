@@ -92,12 +92,36 @@ ws://host:40302/ws/asr/final
 
 ```text
 1. 建立 WebSocket
-2. 发送 {"command":"start"}
+2. 发送 `{"command":"start"}`，可选携带 VAD 断句参数
 3. 持续发送 PCM int16 二进制帧
 4. 持续接收 audio_state / voice_activity
 5. VAD 断句后接收 result / commit_hint
 6. 结束时发送 {"command":"stop"}
 7. 接收 final_text
+```
+
+启动时可以由调用方决定断句参数：
+
+```json
+{
+  "command": "start",
+  "vad": {
+    "chunk_ms": 200,
+    "end_silence_ms": 1200,
+    "speech_noise_threshold": 0.6,
+    "min_speech_duration_ms": 250,
+    "preroll_ms": 1200
+  }
+}
+```
+
+如果只需要让 MonCore 的静音设置生效，也可以只传：
+
+```json
+{
+  "command": "start",
+  "end_silence_ms": 1200
+}
 ```
 
 对 `/ws/asr/final`，第 4 步不会返回 interim，而是在 VAD 断句后返回 `is_interim=false` 的最终段落。只有需要“边说边显示”的字幕体验时，才使用 `/ws/asr/transcribe`。
@@ -155,7 +179,11 @@ ws://host:40302/ws/asr/final
   "type": "commit_hint",
   "reason": "silence",
   "should_commit": true,
-  "final_text": "完整最终文本，带标点。"
+  "final_text": "完整最终文本，带标点。",
+  "vad": {
+    "end_silence_ms": 1200,
+    "actual_silence_ms": 1200
+  }
 }
 ```
 

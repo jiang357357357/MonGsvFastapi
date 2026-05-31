@@ -643,13 +643,39 @@ ws://host:40302/ws/asr/final
 
 ```text
 1. 建立 WebSocket
-2. 发送 {"command":"start"}
+2. 发送 `{"command":"start"}`，可选携带 VAD 断句参数
 3. 持续发送 PCM int16 二进制帧
 4. 持续接收 audio_state 和 voice_activity
 5. VAD 判断一句结束后接收 result 和 commit_hint
 6. 结束时发送 {"command":"stop"}
 7. 接收 final_text
 ```
+
+启动参数：
+
+```json
+{
+  "command": "start",
+  "vad": {
+    "chunk_ms": 200,
+    "end_silence_ms": 1200,
+    "speech_noise_threshold": 0.6,
+    "min_speech_duration_ms": 250,
+    "preroll_ms": 1200
+  }
+}
+```
+
+也可以只传最小字段：
+
+```json
+{
+  "command": "start",
+  "end_silence_ms": 1200
+}
+```
+
+未传时使用默认值：`chunk_ms=200`、`end_silence_ms=1800`、`speech_noise_threshold=0.6`、`min_speech_duration_ms=250`、`preroll_ms=1200`。
 
 音频状态事件：
 
@@ -699,7 +725,11 @@ ws://host:40302/ws/asr/final
   "type": "commit_hint",
   "reason": "silence",
   "should_commit": true,
-  "final_text": "最终识别文本，带标点。"
+  "final_text": "最终识别文本，带标点。",
+  "vad": {
+    "end_silence_ms": 1200,
+    "actual_silence_ms": 1200
+  }
 }
 ```
 

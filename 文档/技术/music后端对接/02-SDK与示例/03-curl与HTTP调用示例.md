@@ -739,7 +739,16 @@ async function startRealtimeAsr(pcmStream) {
     ws.onopen = resolve;
   });
 
-  ws.send(JSON.stringify({ command: 'start' }));
+  ws.send(JSON.stringify({
+    command: 'start',
+    vad: {
+      chunk_ms: 200,
+      end_silence_ms: 1200,
+      speech_noise_threshold: 0.6,
+      min_speech_duration_ms: 250,
+      preroll_ms: 1200,
+    },
+  }));
 
   // pcmStream 需要持续产出 16kHz / mono / signed int16 / little-endian 的 PCM 二进制帧。
   for await (const pcmChunk of pcmStream) {
