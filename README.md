@@ -131,6 +131,36 @@ cd Code\GptSov_Front
 npm install
 ```
 
+## 启动项目
+
+Windows 下可以直接使用 `Script/Cmd/Win` 里的启动脚本：
+
+```powershell
+.\Script\Cmd\Win\start.cmd
+```
+
+开发模式：
+
+```powershell
+.\Script\Cmd\Win\start-dev.cmd
+```
+
+生产启动脚本会调用 `Code\Main\launch.py`，启动 FastAPI 网关和已有的前端 `dist` preview。
+
+如果需要重新编译前端，先单独执行：
+
+```powershell
+.\Script\Cmd\Win\build-frontend.cmd
+```
+
+Linux 下对应脚本在 `Script/Cmd/Linux`：
+
+```bash
+bash Script/Cmd/Linux/start.sh
+bash Script/Cmd/Linux/start-dev.sh
+bash Script/Cmd/Linux/build-frontend.sh
+```
+
 ## 给客户做离线 GPU 环境
 
 这个仓库现在的 Python 环境特征是：
@@ -225,6 +255,30 @@ nvidia-smi
 - 你们后面会频繁切 CUDA 大版本
 
 如果后续要做更重的 GPU 交付，比如长期维护多台客户机、依赖持续增多、需要更强的环境可搬运性，再考虑 `conda-pack` 或 Docker。
+
+### 项目打包
+
+Windows 下统一使用 `Script/7Z/win/pack.ps1`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Script\7Z\win\pack.ps1
+```
+
+打包脚本会先执行前端构建，并把 `Code/GptSov_Front/dist` 一起放进压缩包。  
+如果只想复用已有 `dist`，可以跳过前端构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Script\7Z\win\pack.ps1 -SkipFrontendBuild
+```
+
+指定输出文件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Script\7Z\win\pack.ps1 `
+  -OutputFile "D:\code\model\mongsvfastapi\test\MonGsvFastapi.7z"
+```
+
+该脚本会读取 `.monconfig` 中 `[pack] EXCLUDE_PATTERNS` 的排除规则。
 
 ## 准备模型
 

@@ -150,7 +150,6 @@ EXCLUDE_PATTERNS=
     *.so
     *.egg
     *.egg-info
-    dist
     build
     .venv
     venv

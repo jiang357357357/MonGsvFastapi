@@ -15,6 +15,16 @@ import socket
 from pathlib import Path
 
 
+def configure_stdio():
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 def get_local_ip():
     """获取本机 IP 地址"""
     try:
@@ -33,7 +43,48 @@ os.chdir(PROJECT_ROOT)
 
 # 添加项目路径
 sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "Code" / "GsvBack"))
+
+FRONTEND_DIR = PROJECT_ROOT / "Code" / "GptSov_Front"
+GATEWAY_ENTRY = PROJECT_ROOT / "Code" / "FastApi" / "Main" / "run_gateway.py"
+MONCONFIG_PATH = PROJECT_ROOT / ".monconfig"
+
+
+def load_monconfig():
+    config = {}
+    if not MONCONFIG_PATH.exists():
+        return config
+
+    current_section = "default"
+    for raw_line in MONCONFIG_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current_section = line[1:-1].strip()
+            config.setdefault(current_section, {})
+            continue
+        if "=" not in line:
+            continue
+        line = line.split("#", 1)[0].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        config.setdefault(current_section, {})[key.strip()] = value.strip()
+    return config
+
+
+def config_value(config, section, key, default):
+    return config.get(section, {}).get(key, default)
+
+
+def default_backend_port():
+    config = load_monconfig()
+    return int(config_value(config, "server", "PORT", "40302"))
+
+
+def default_frontend_port():
+    config = load_monconfig()
+    return int(config_value(config, "frontend", "PORT", "40031"))
 
 
 def print_banner():
@@ -72,7 +123,7 @@ def check_dev_environment():
         print(f"      建议: .venv\\Scripts\\activate")
     
     # 检查后端文件
-    backend_path = PROJECT_ROOT / "Code" / "GsvBack" / "main.py"
+    backend_path = GATEWAY_ENTRY
     if backend_path.exists():
         print(f"  [✓] 后端文件: {backend_path}")
     else:
@@ -80,7 +131,7 @@ def check_dev_environment():
         return False
     
     # 检查前端目录
-    frontend_path = PROJECT_ROOT / "Code" / "GptSov_Front"
+    frontend_path = FRONTEND_DIR
     if frontend_path.exists():
         print(f"  [✓] 前端目录: {frontend_path}")
     else:
@@ -99,17 +150,23 @@ def check_dev_environment():
 
 def start_backend_dev(host="127.0.0.1", port=None):
     """启动开发模式后端（在新终端窗口中）"""
-    backend_path = PROJECT_ROOT / "Code" / "GsvBack" / "main.py"
+    backend_path = GATEWAY_ENTRY
+    backend_port = port or default_backend_port()
     
     print(f"[→] 正在启动后端服务 (开发模式)...")
-    print(f"    访问地址: http://localhost:{port or '7020'}/Core/")
+    print(f"    访问地址: http://localhost:{backend_port}/docs")
     
     # 构建命令参数
-    cmd_args = [str(backend_path)]
+    cmd_args = [
+        str(backend_path),
+        "start",
+        "--reload",
+        "--log-level",
+        "debug",
+    ]
     if host:
         cmd_args.extend(["--host", host])
-    if port:
-        cmd_args.extend(["--port", str(port)])
+    cmd_args.extend(["--port", str(backend_port)])
     
     # 设置环境变量
     env = os.environ.copy()
@@ -142,7 +199,7 @@ def start_backend_dev(host="127.0.0.1", port=None):
 
 def start_frontend_dev():
     """启动开发模式前端（在新终端窗口中）"""
-    frontend_path = PROJECT_ROOT / "Code" / "GptSov_Front"
+    frontend_path = FRONTEND_DIR
     
     if not frontend_path.exists():
         print(f"[!] 前端目录不存在: {frontend_path}")
@@ -196,7 +253,7 @@ def watch_files():
     print("[👁] 文件监视已启动")
     last_mtime = {}
     watch_paths = [
-        PROJECT_ROOT / "Code" / "GsvBack",
+        PROJECT_ROOT / "Code" / "FastApi",
         PROJECT_ROOT / "Code" / "GptSov_Front" / "src",
     ]
     
@@ -216,9 +273,10 @@ def watch_files():
 
 
 def main():
+    configure_stdio()
     parser = argparse.ArgumentParser(description="MonGSV 系统启动器 (开发模式)")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="后端绑定地址")
-    parser.add_argument("--port", type=int, default=None, help="后端端口号")
+    parser.add_argument("--port", type=int, default=None, help="后端端口号，默认读取 .monconfig")
     parser.add_argument("--no-frontend", action="store_true", help="不启动前端")
     parser.add_argument("--no-backend", action="store_true", help="不启动后端")
     parser.add_argument("--verbose", "-v", action="store_true", help="显示详细输出")
@@ -272,9 +330,9 @@ def main():
     print("=" * 60)
     print("服务访问地址:")
     if "后端" in processes:
-        print(f"  后端 API: http://localhost:{args.port or '7020'}/Core/")
+        print(f"  后端 API: http://localhost:{args.port or default_backend_port()}/docs")
     if "前端" in processes:
-        print(f"  前端页面: http://localhost:7010/")
+        print(f"  前端页面: http://localhost:{default_frontend_port()}/")
     print("=" * 60)
     print("\n按 Ctrl+C 停止所有服务")
     if args.watch:

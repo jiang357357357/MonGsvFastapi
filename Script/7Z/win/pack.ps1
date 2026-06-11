@@ -12,6 +12,9 @@ param(
     [switch]$UseTar,
 
     [Parameter()]
+    [switch]$SkipFrontendBuild,
+
+    [Parameter()]
     [Alias("h")]
     [switch]$Help
 )
@@ -122,13 +125,59 @@ function Show-Help {
     Write-Host "MonGSV packer for Windows"
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  .\\pack.ps1 [-OutputFile <file>] [-SourceDir <dir>] [-UseTar] [-Help]"
+    Write-Host "  .\\pack.ps1 [-OutputFile <file>] [-SourceDir <dir>] [-UseTar] [-SkipFrontendBuild] [-Help]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  -OutputFile <file>   Output archive path"
     Write-Host "  -SourceDir <dir>     Source directory, defaults to workspace root"
     Write-Host "  -UseTar              Build tar.gz instead of 7z"
+    Write-Host "  -SkipFrontendBuild   Do not run npm build before packing"
     Write-Host "  -Help, -h            Show help"
+    Write-Host ""
+}
+
+function Invoke-FrontendBuild {
+    param([string]$Root)
+
+    $frontendDir = Join-Path $Root "Code\GptSov_Front"
+    $packageJson = Join-Path $frontendDir "package.json"
+    if (-not (Test-Path -LiteralPath $packageJson -PathType Leaf)) {
+        Write-Host "[Build] Frontend package.json not found, skipping." -ForegroundColor Yellow
+        return
+    }
+
+    $npm = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        $npm = Get-Command "npm" -ErrorAction SilentlyContinue
+    }
+    if (-not $npm) {
+        throw "Could not find npm. Build frontend first or use -SkipFrontendBuild."
+    }
+
+    Write-Host "[Build] Building frontend dist..." -ForegroundColor Cyan
+    Push-Location $frontendDir
+    try {
+        if (-not (Test-Path -LiteralPath "node_modules" -PathType Container)) {
+            if (Test-Path -LiteralPath "package-lock.json" -PathType Leaf) {
+                & $npm.Source ci
+            }
+            else {
+                & $npm.Source install
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "Frontend dependency install failed with code $LASTEXITCODE."
+            }
+        }
+
+        & $npm.Source run build
+        if ($LASTEXITCODE -ne 0) {
+            throw "Frontend build failed with code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+    Write-Host "[Build] Frontend dist is ready." -ForegroundColor Green
     Write-Host ""
 }
 
@@ -216,6 +265,10 @@ else {
 
 if (-not (Test-Path -LiteralPath $SourceDir -PathType Container)) {
     throw "Source directory does not exist: $SourceDir"
+}
+
+if (-not $SkipFrontendBuild) {
+    Invoke-FrontendBuild -Root $SourceDir
 }
 
 $monconfigPath = Join-Path $SourceDir ".monconfig"
