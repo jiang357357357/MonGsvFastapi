@@ -71,6 +71,7 @@ GPT_SoVITS/text/*.pickle
 GPT_SoVITS/text/*.rep
 Env/Models/pretrained_models/
 Env/Models/uvr5_weights/
+Env/OfflinePy/
 tools/asr/models/
 down/
 文档/参考/Mon_Hub_Main/
@@ -87,6 +88,7 @@ Resources/Model/**/SoVITS/
 Resources/Model/**/emotion/
 Resources/Model/**/infer/
 Resources/Model/**/dataset/
+Resources/Model/**/meta/
 Resources/Model/**/*.ckpt
 Resources/Model/**/*.pth
 Resources/Model/**/*.wav

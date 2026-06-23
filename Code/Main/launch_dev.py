@@ -12,6 +12,7 @@ import argparse
 import time
 import threading
 import socket
+import queue
 from pathlib import Path
 
 
@@ -87,6 +88,12 @@ def default_frontend_port():
     return int(config_value(config, "frontend", "PORT", "40031"))
 
 
+def command_name(name):
+    if os.name == "nt" and not name.endswith(".cmd"):
+        return f"{name}.cmd"
+    return name
+
+
 def print_banner():
     """打印开发模式横幅"""
     print("\n" + "=" * 60)
@@ -149,7 +156,7 @@ def check_dev_environment():
 
 
 def start_backend_dev(host="127.0.0.1", port=None):
-    """启动开发模式后端（在新终端窗口中）"""
+    """启动开发模式后端，并让当前启动器持有真实子进程。"""
     backend_path = GATEWAY_ENTRY
     backend_port = port or default_backend_port()
     
@@ -173,23 +180,21 @@ def start_backend_dev(host="127.0.0.1", port=None):
     env["MON_GSV_ENV"] = "development"
     env["DEBUG"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
     
     try:
-        # 使用 PowerShell 在新终端窗口中启动
-        # 构建要执行的命令
-        python_exe = sys.executable
-        # 构建参数列表，每个参数用引号包裹
-        quoted_args = ' '.join(['"' + arg + '"' for arg in cmd_args])
-        script_cmd = '& "' + python_exe + '" ' + quoted_args
-        full_cmd = 'cd "' + str(PROJECT_ROOT) + '"; ' + script_cmd
-        
-        ps_command = "Start-Process powershell -ArgumentList '-NoExit', '-Command', '" + full_cmd + "'"
-        
         process = subprocess.Popen(
-            ["powershell", "-Command", ps_command],
+            [sys.executable, *cmd_args],
             cwd=str(PROJECT_ROOT),
             env=env,
-            shell=True
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
         )
         return process
     except Exception as e:
@@ -197,31 +202,67 @@ def start_backend_dev(host="127.0.0.1", port=None):
         return None
 
 
+def ensure_frontend_dependencies():
+    package_json = FRONTEND_DIR / "package.json"
+    if not package_json.exists():
+        print(f"[!] 前端 package.json 不存在: {package_json}")
+        return False
+
+    npm = command_name("npm")
+    try:
+        subprocess.run([npm, "--version"], cwd=str(FRONTEND_DIR), check=True, stdout=subprocess.DEVNULL)
+    except Exception:
+        print("[!] 未找到 npm。开发模式需要 Node.js/npm；客户生产启动不需要 npm。")
+        return False
+
+    if (FRONTEND_DIR / "node_modules").exists():
+        return True
+
+    install_cmd = [npm, "ci"] if (FRONTEND_DIR / "package-lock.json").exists() else [npm, "install"]
+    print("[i] 前端 node_modules 不存在，正在安装开发依赖...")
+    result = subprocess.run(install_cmd, cwd=str(FRONTEND_DIR), check=False)
+    if result.returncode != 0:
+        print(f"[!] 前端依赖安装失败 (code: {result.returncode})")
+        return False
+    return True
+
+
 def start_frontend_dev():
-    """启动开发模式前端（在新终端窗口中）"""
+    """启动开发模式前端，并让当前启动器持有真实子进程。"""
     frontend_path = FRONTEND_DIR
     
     if not frontend_path.exists():
         print(f"[!] 前端目录不存在: {frontend_path}")
         return None
+
+    if not ensure_frontend_dependencies():
+        return None
     
     print(f"[→] 正在启动前端服务 (开发模式)...")
     
     try:
-        # 使用 PowerShell 在新终端窗口中启动
-        frontend_cmd = 'cd "' + str(frontend_path) + '"; npm run dev'
-        ps_command = "Start-Process powershell -ArgumentList '-NoExit', '-Command', '" + frontend_cmd + "'"
-        
         process = subprocess.Popen(
-            ["powershell", "-Command", ps_command],
+            [command_name("npm"), "run", "dev", "--", "--host", "0.0.0.0", "--port", str(default_frontend_port())],
             cwd=str(frontend_path),
             env=os.environ.copy(),
-            shell=True
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
         )
         return process
     except Exception as e:
         print(f"[!] 前端启动失败: {e}")
         return None
+
+
+def enqueue_output(process, name, output_queue):
+    if process.stdout is None:
+        return
+    for line in iter(process.stdout.readline, ""):
+        output_queue.put((name, line.rstrip()))
 
 
 def output_reader(process, name, verbose=False):
@@ -246,6 +287,39 @@ def output_reader(process, name, verbose=False):
                         break
     except:
         pass
+
+
+def terminate_process_tree(process, name):
+    if process.poll() is not None:
+        print(f"[✓] {name} 已停止")
+        return
+
+    if os.name == "nt":
+        result = subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
+        if result.returncode == 0 or process.poll() is not None:
+            print(f"[✓] {name} 已停止")
+        else:
+            print(f"[!] {name} 进程树清理可能未完成: {result.stderr.strip() or result.stdout.strip()}")
+        return
+
+    process.terminate()
+    try:
+        process.wait(timeout=3)
+        print(f"[✓] {name} 已停止")
+    except subprocess.TimeoutExpired:
+        process.kill()
+        print(f"[✓] {name} 已强制停止")
 
 
 def watch_files():
@@ -302,14 +376,15 @@ def main():
     
     # 存储进程
     processes = {}
-    threads = []
+    output_queue = queue.Queue()
     
     # 启动后端
     if not args.no_backend:
         backend_proc = start_backend_dev(args.host, args.port)
         if backend_proc:
             processes["后端"] = backend_proc
-            print(f"[✓] 后端已启动 (新终端窗口)\n")
+            threading.Thread(target=enqueue_output, args=(backend_proc, "后端", output_queue), daemon=True).start()
+            print(f"[✓] 后端已启动\n")
         else:
             print("[!] 后端启动失败\n")
     
@@ -318,7 +393,8 @@ def main():
         frontend_proc = start_frontend_dev()
         if frontend_proc:
             processes["前端"] = frontend_proc
-            print(f"[✓] 前端已启动 (新终端窗口)\n")
+            threading.Thread(target=enqueue_output, args=(frontend_proc, "前端", output_queue), daemon=True).start()
+            print(f"[✓] 前端已启动\n")
         else:
             print("[!] 前端启动失败\n")
     
@@ -348,18 +424,69 @@ def main():
                     del processes[name]
             if not processes:
                 break
-            time.sleep(0.5)
+
+            try:
+                name, line = output_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if not line:
+                continue
+            if name == "后端" or args.verbose:
+                print(f"[{name}] {line}", flush=True)
+            else:
+                key_patterns = [
+                    "Application startup complete",
+                    "Uvicorn running",
+                    "Local:",
+                    "Network:",
+                    "ready in",
+                    "[ASR]",
+                    "[asr-residency]",
+                    "Downloading model",
+                    "Using cached model",
+                    "loading faster whisper model",
+                    "Faster-Whisper",
+                    "HuggingFace",
+                    "ModelScope",
+                    "[workflow]",
+                    "audio_slice",
+                    "asr_recognition",
+                    "text_processing",
+                    "audio_features",
+                    "semantic_encoding",
+                    "gpt_training",
+                    "sovits_training",
+                    "training_dataset_check",
+                    "训练",
+                    "预处理",
+                    "特征",
+                    "语义",
+                    "编码",
+                    "启动",
+                    "完成",
+                    "已保存",
+                    "保存",
+                    "Saving model",
+                    "saving ckpt",
+                    "Train Epoch",
+                    "Epoch:",
+                    "loaded pretrained",
+                    "Loaded checkpoint",
+                    "job_id",
+                    "Error",
+                    "ERROR",
+                    "Traceback",
+                    "错误",
+                    "失败",
+                ]
+                if any(pattern in line for pattern in key_patterns):
+                    print(f"[{name}] {line}", flush=True)
     except KeyboardInterrupt:
         print("\n[!] 正在关闭服务...")
     finally:
         for name, proc in processes.items():
-            try:
-                proc.terminate()
-                proc.wait(timeout=3)
-                print(f"[✓] {name} 已停止")
-            except:
-                proc.kill()
-                print(f"[✓] {name} 已强制停止")
+            terminate_process_tree(proc, name)
         print("\n[✓] 所有服务已停止")
 
 

@@ -145,7 +145,8 @@ Windows 下可以直接使用 `Script/Cmd/Win` 里的启动脚本：
 .\Script\Cmd\Win\start-dev.cmd
 ```
 
-生产启动脚本会调用 `Code\Main\launch.py`，启动 FastAPI 网关和已有的前端 `dist` preview。
+生产启动脚本会调用 `Code\Main\launch.py`，启动 FastAPI 网关，并用 Python 托管已有的前端 `dist`。
+客户机器运行生产包不需要安装 Node.js、`npm` 或 `npx`；这些工具只在打包机重新构建前端时需要。
 
 如果需要重新编译前端，先单独执行：
 

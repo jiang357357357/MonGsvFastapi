@@ -13,45 +13,15 @@ if os.name == "nt":
 
     class win_G2p(G2p):
         def check_mecab(self):
-            super().check_mecab()
-            spam_spec = importlib.util.find_spec("eunjeon")
+            spam_spec = importlib.util.find_spec("mecab")
             non_found = spam_spec is None
             if non_found:
-                print("you have to install eunjeon. install it...")
-            else:
-                installpath = spam_spec.submodule_search_locations[0]
-                if not (re.match(r"^[A-Za-z0-9_/\\:.\-]*$", installpath)):
-                    import sys
-                    from eunjeon import Mecab as _Mecab
+                raise ImportError("python-mecab-ko is required for Korean text processing on Windows")
 
-                    class Mecab(_Mecab):
-                        def get_dicpath(installpath):
-                            if not (re.match(r"^[A-Za-z0-9_/\\:.\-]*$", installpath)):
-                                import shutil
+        def get_mecab(self):
+            import mecab
 
-                                python_dir = os.getcwd()
-                                if installpath[: len(python_dir)].upper() == python_dir.upper():
-                                    dicpath = os.path.join(os.path.relpath(installpath, python_dir), "data", "mecabrc")
-                                else:
-                                    if not os.path.exists("TEMP"):
-                                        os.mkdir("TEMP")
-                                    if not os.path.exists(os.path.join("TEMP", "ko")):
-                                        os.mkdir(os.path.join("TEMP", "ko"))
-                                    if os.path.exists(os.path.join("TEMP", "ko", "ko_dict")):
-                                        shutil.rmtree(os.path.join("TEMP", "ko", "ko_dict"))
-
-                                    shutil.copytree(
-                                        os.path.join(installpath, "data"), os.path.join("TEMP", "ko", "ko_dict")
-                                    )
-                                    dicpath = os.path.join("TEMP", "ko", "ko_dict", "mecabrc")
-                            else:
-                                dicpath = os.path.abspath(os.path.join(installpath, "data/mecabrc"))
-                            return dicpath
-
-                        def __init__(self, dicpath=get_dicpath(installpath)):
-                            super().__init__(dicpath=dicpath)
-
-                    sys.modules["eunjeon"].Mecab = Mecab
+            return mecab.MeCab()
 
     G2p = win_G2p
 

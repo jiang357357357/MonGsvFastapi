@@ -3,7 +3,7 @@
 """
 MonGSV 生产模式启动器。
 
-启动当前 FastAPI 网关后端，以及编译后的前端 preview 服务。
+启动当前 FastAPI 网关后端，以及编译后的前端静态服务。
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import os
 import queue
-import shutil
 import subprocess
 import sys
 import threading
@@ -21,7 +20,9 @@ from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "Code" / "GptSov_Front"
+FRONTEND_DIST = FRONTEND_DIR / "dist"
 GATEWAY_ENTRY = PROJECT_ROOT / "Code" / "FastApi" / "Main" / "run_gateway.py"
+FRONTEND_SERVER_ENTRY = PROJECT_ROOT / "Code" / "Main" / "serve_frontend.py"
 MONCONFIG_PATH = PROJECT_ROOT / ".monconfig"
 
 
@@ -38,7 +39,7 @@ def configure_stdio() -> None:
 def print_banner() -> None:
     print("\n" + "=" * 70)
     print("       MonGSV - GPT-SoVITS FastAPI 系统启动器")
-    print("       生产模式: FastAPI Gateway + Vite Preview")
+    print("       生产模式: FastAPI Gateway + Frontend Dist")
     print("=" * 70 + "\n")
 
 
@@ -95,21 +96,18 @@ def python_executable() -> str:
     return sys.executable
 
 
-def check_environment() -> bool:
+def check_environment(*, no_frontend: bool = False, build_frontend_requested: bool = False) -> bool:
     missing: list[str] = []
     if not GATEWAY_ENTRY.exists():
         missing.append(str(GATEWAY_ENTRY))
-    if not FRONTEND_DIR.exists():
+    if not no_frontend and not FRONTEND_DIR.exists():
         missing.append(str(FRONTEND_DIR))
-    if not (FRONTEND_DIR / "package.json").exists():
+    if not no_frontend and build_frontend_requested and not (FRONTEND_DIR / "package.json").exists():
         missing.append(str(FRONTEND_DIR / "package.json"))
-
-    npm = shutil.which(command_name("npm"))
-    npx = shutil.which(command_name("npx"))
-    if not npm:
-        missing.append("npm")
-    if not npx:
-        missing.append("npx")
+    if not no_frontend and not build_frontend_requested and not (FRONTEND_DIST / "index.html").exists():
+        missing.append(str(FRONTEND_DIST / "index.html"))
+    if not no_frontend and not FRONTEND_SERVER_ENTRY.exists():
+        missing.append(str(FRONTEND_SERVER_ENTRY))
 
     if missing:
         print("[!] 环境检查失败，缺少:")
@@ -119,7 +117,8 @@ def check_environment() -> bool:
 
     print("[✓] 环境检查通过")
     print(f"    Python: {python_executable()}")
-    print(f"    npm   : {npm}")
+    if not no_frontend:
+        print(f"    Front : {FRONTEND_DIST}")
     return True
 
 
@@ -129,6 +128,18 @@ def ensure_frontend_dependencies() -> bool:
         return True
 
     npm = command_name("npm")
+    try:
+        subprocess.run(
+            [npm, "--version"],
+            cwd=str(FRONTEND_DIR),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+    except Exception:
+        print("[!] 未找到 npm，无法在客户机现场构建前端。请在打包机预先构建 dist，或安装 Node.js 后使用 --build。")
+        return False
+
     install_cmd = [npm, "ci"] if (FRONTEND_DIR / "package-lock.json").exists() else [npm, "install"]
     print("[→] 前端依赖不存在，正在安装...")
     result = subprocess.run(
@@ -148,6 +159,8 @@ def ensure_frontend_dependencies() -> bool:
 
 def build_frontend() -> bool:
     print("[→] 正在编译前端...")
+    if not ensure_frontend_dependencies():
+        return False
     result = subprocess.run(
         [command_name("npm"), "run", "build"],
         cwd=str(FRONTEND_DIR),
@@ -199,15 +212,13 @@ def start_backend(host: str, port: int) -> Optional[subprocess.Popen]:
 
 
 def start_frontend(port: int, build: bool = False) -> Optional[subprocess.Popen]:
-    if not ensure_frontend_dependencies():
-        return None
     if build and not build_frontend():
         return None
-    if not (FRONTEND_DIR / "dist").exists():
-        print("[!] 前端 dist 目录不存在，请先执行一次 npm run build，或使用 --build")
+    if not (FRONTEND_DIST / "index.html").exists():
+        print("[!] 前端 dist 不存在，请先在打包机执行 npm run build，或在本机安装 Node.js 后使用 --build")
         return None
 
-    print("[→] 正在启动前端 preview...")
+    print("[→] 正在启动前端静态服务...")
     print(f"    访问地址: http://127.0.0.1:{port}/")
 
     env = os.environ.copy()
@@ -215,19 +226,20 @@ def start_frontend(port: int, build: bool = False) -> Optional[subprocess.Popen]
     env["FRONTEND_PORT"] = str(port)
 
     cmd = [
-        command_name("npx"),
-        "vite",
-        "preview",
+        python_executable(),
+        str(FRONTEND_SERVER_ENTRY),
         "--host",
         "0.0.0.0",
         "--port",
         str(port),
+        "--dist",
+        str(FRONTEND_DIST),
     ]
 
     try:
         return subprocess.Popen(
             cmd,
-            cwd=str(FRONTEND_DIR),
+            cwd=str(PROJECT_ROOT),
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -334,7 +346,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print_banner()
-    if not check_environment():
+    if not check_environment(no_frontend=args.no_frontend, build_frontend_requested=args.build):
         return 1
     print()
 
