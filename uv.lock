@@ -948,10 +948,11 @@ http = [
 
 [[package]]
 name = "funasr"
-version = "1.3.1"
+version = "1.3.14"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
 dependencies = [
     { name = "editdistance" },
+    { name = "huggingface-hub" },
     { name = "hydra-core" },
     { name = "jaconv" },
     { name = "jamo" },
@@ -959,21 +960,25 @@ dependencies = [
     { name = "kaldiio" },
     { name = "librosa" },
     { name = "modelscope" },
+    { name = "numpy" },
+    { name = "omegaconf" },
     { name = "oss2" },
-    { name = "pytorch-wpe" },
     { name = "pyyaml" },
     { name = "requests" },
+    { name = "safetensors" },
     { name = "scipy" },
     { name = "sentencepiece" },
     { name = "soundfile" },
     { name = "tensorboardx" },
+    { name = "tiktoken" },
     { name = "torch-complex" },
     { name = "tqdm" },
+    { name = "transformers" },
     { name = "umap-learn" },
 ]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/87/dc/d5586cd788bdf75286d73e646f5f354f8b3220b75a61c0325a177689065d/funasr-1.3.1.tar.gz", hash = "sha256:ed813c0ecade7d24393943a82a91f7cee822178ab4bfd303adb8ad318605e0a5" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b8/50/46a5f1b4eb369943bb6177490a57e368a6b66075d39727575f07a5813973/funasr-1.3.14.tar.gz", hash = "sha256:fed214b60300f13470749956df0de9a1c9c213e53ceccf22b2e6f70b5fff5dfb" }
 wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/57/89/61c09967f0f4f091402367215000c3c060bfeaadbbdc9aca42856d299c95/funasr-1.3.1-py3-none-any.whl", hash = "sha256:f63050d7d625f287ec741b84a0325365699c49550a4bfd3ace4acb43e41a87a8" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/cb/f9/cda21e7a12d12889774191267b0348379ed5ab8d894d13cd239acd4538dc/funasr-1.3.14-py3-none-any.whl", hash = "sha256:fd2d451a323ce0d1bda0566bc9ca4224b4429bf46d55882cf35ad482118173fd" },
 ]
 
 [[package]]
@@ -1101,7 +1106,7 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.2" },
     { name = "faster-whisper", specifier = ">=1.1,<2" },
     { name = "ffmpeg-python" },
-    { name = "funasr", specifier = ">=1.3.1" },
+    { name = "funasr", specifier = ">=1.3.7" },
     { name = "g2p-en" },
     { name = "g2pk2" },
     { name = "gradio", specifier = "<5" },
@@ -2528,18 +2533,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pytorch-wpe"
-version = "0.0.1"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
-dependencies = [
-    { name = "numpy" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/db/39/8d94737fd6fab4028687575099566a125100f3ba8c638f861506747d7b7c/pytorch_wpe-0.0.1.tar.gz", hash = "sha256:fc7e706b5411800c4483fe94db7dcd82ecf6c57bc013af529ab4fb675c9cc29c" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/23/de/c47967a11bfe68cb28d2f19e55c7027993c3721eba79813db65d245e4ced/pytorch_wpe-0.0.1-py3-none-any.whl", hash = "sha256:fa0dc9f818fba81b36c1a51a53331cf6ed975f29b33f23e07b0deb4bee82eaad" },
-]
-
-[[package]]
 name = "pytz"
 version = "2025.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -3115,6 +3108,25 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b7/4d/08c89e34946fce2aec4fbb45c9016efd5f4d7f24af8e5d93296e935631d8/threadpoolctl-3.6.0.tar.gz", hash = "sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb" },
+]
+
+[[package]]
+name = "tiktoken"
+version = "0.13.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+dependencies = [
+    { name = "regex" },
+    { name = "requests" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/e4/e5/5f3cb2159769d0f4324c0e9e87f9de3c4b1cd45848a96b2eb3566ad5ca77/tiktoken-0.13.0.tar.gz", hash = "sha256:c9435714c3a84c2319499de9a300c0e604449dd0799ff246458b3bb6a7f433c1" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/38/e3/03c90dadcf5b3f82b83cee9adee60ef666b329c654f58c066af44eae0287/tiktoken-0.13.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:47b1df8d73390a24f94980c75158cdd5c56d256f16d55f30cb49c230caba9ba4" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/5e/30/760463e5b2e8ad2bc229ae0a17ecb06727b6cbc094f08d8f65844315632e/tiktoken-0.13.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:7d40c6c5aab171dcd6eb8455bc567bde404bb9def60cdb8c1299cc782b242bb9" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/de/8a/8895f342a6b6aabd1a358e672f6f077b3ae51d0c63ca605d142db3bcd8ab/tiktoken-0.13.0-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:9b842981fa91accdffd48ff6408a977b7a91c3fbda55d353c3c68114d5c9d69e" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/51/e0/92557768fb0801f0d9dd9243cb9b6d342900b05e4b1006d4771f49ce233e/tiktoken-0.13.0-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:ed5a30027cb4d8c7ca8b273d4766f3db3cf58fad9e9f3b1a68a351ffb54873d5" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/8f/b9/a3d99feeedb032ffd09cd6652077f86bdee9a70dd0b990b2b272b445d4c3/tiktoken-0.13.0-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:7ab10f4a21c2999846940113f6dbd72e0fa06a24119feddd74cc47e85818e06d" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/cc/93/bab868277d475dc6d2aaacd34cdd239c282f4908dcc8702e0a3311a8e032/tiktoken-0.13.0-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:a2937ad042d49d50eac6e1ba07c5661d4bd3942a5b1e0c0d08475c4df83676e1" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/c3/16/27e9f7e0ed76e501cfefc9fb2112df4c7bf70ca96945b15ecb7615aac860/tiktoken-0.13.0-cp310-cp310-win_amd64.whl", hash = "sha256:44733b99bfd72b590cd0936b1c01b3b4dd73122db2d544bc1ceeb18a7678c910" },
 ]
 
 [[package]]

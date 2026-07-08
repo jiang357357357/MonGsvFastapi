@@ -9,8 +9,9 @@ from funasr import AutoModel
 from modelscope import snapshot_download
 from tqdm import tqdm
 
-funasr_models = {}  # 存储模型避免重复加载
+funasr_models: Dict[str, Any] = {}  # 存储模型避免重复加载
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg"}
+SUPPORTED_BACKENDS = ("classic", "fun-asr-nano", "sensevoice")
 
 
 def has_required_files(local_dir, required_files):
@@ -30,9 +31,25 @@ def ensure_snapshot(repo_id, local_dir, required_files):
     return local_dir
 
 
-def only_asr(input_file, language):
+def normalize_backend(backend=None):
+    backend = (backend or "classic").strip().lower()
+    aliases = {
+        "damo": "classic",
+        "legacy": "classic",
+        "paraformer": "classic",
+        "funasr-nano": "fun-asr-nano",
+        "nano": "fun-asr-nano",
+        "sense-voice": "sensevoice",
+    }
+    backend = aliases.get(backend, backend)
+    if backend not in SUPPORTED_BACKENDS:
+        raise ValueError(f"{backend} is not supported. Supported backends: {', '.join(SUPPORTED_BACKENDS)}")
+    return backend
+
+
+def only_asr(input_file, language, backend="classic"):
     try:
-        model = create_model(language)
+        model = create_model(language, backend=backend)
         text = transcribe_with_model(model, input_file)
     except Exception:
         text = ""
@@ -40,7 +57,43 @@ def only_asr(input_file, language):
     return text
 
 
-def create_model(language="zh", use_cache=True):
+def create_model(language="zh", use_cache=True, backend="classic"):
+    backend = normalize_backend(backend)
+    if language == "yue" and backend in ("fun-asr-nano", "sensevoice"):
+        backend = "classic"
+
+    # Nano and SenseVoice are multilingual. Cantonese uses the classic yue model.
+    if backend in ("fun-asr-nano", "sensevoice"):
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        cache_key = f"{language}_{backend}"
+        if use_cache and cache_key in funasr_models:
+            return funasr_models[cache_key]
+
+        if backend == "fun-asr-nano":
+            model = AutoModel(
+                model="FunAudioLLM/Fun-ASR-Nano-2512",
+                trust_remote_code=True,
+                hub="hf",
+                vad_model="fsmn-vad",
+                device=device,
+                disable_update=True,
+            )
+            print(f"FunASR Fun-ASR-Nano 模型加载完成: {language.upper()}")
+        else:
+            model = AutoModel(
+                model="iic/SenseVoiceSmall",
+                vad_model="fsmn-vad",
+                device=device,
+                disable_update=True,
+            )
+            print(f"FunASR SenseVoice 模型加载完成: {language.upper()}")
+
+        if use_cache:
+            funasr_models[cache_key] = model
+        return model
+
     if language == "zh":
         path_vad = ensure_snapshot(
             "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
@@ -58,6 +111,7 @@ def create_model(language="zh", use_cache=True):
             ["configuration.json", "model.pt", "tokens.json"],
         )
         model_revision = "v2.0.4"
+        vad_model_revision = punc_model_revision = "v2.0.4"
     elif language == "yue":
         path_asr = ensure_snapshot(
             "iic/speech_UniASR_asr_2pass-cantonese-CHS-16k-common-vocab1468-tensorflow1-online",
@@ -68,12 +122,11 @@ def create_model(language="zh", use_cache=True):
         vad_model_revision = punc_model_revision = ""
         model_revision = "master"
     else:
-        raise ValueError(f"{language} is not supported")
+        raise ValueError(f"{language} is not supported. Supported: zh, yue, ja, en, ko, auto")
 
-    vad_model_revision = punc_model_revision = "v2.0.4"
-
-    if use_cache and language in funasr_models:
-        return funasr_models[language]
+    cache_key = f"{language}_{backend}"
+    if use_cache and cache_key in funasr_models:
+        return funasr_models[cache_key]
     model = AutoModel(
         model=path_asr,
         model_revision=model_revision,
@@ -85,7 +138,7 @@ def create_model(language="zh", use_cache=True):
     print(f"FunASR 模型加载完成: {language.upper()}")
 
     if use_cache:
-        funasr_models[language] = model
+        funasr_models[cache_key] = model
     return model
 
 
@@ -147,32 +200,26 @@ def write_output_file(output_folder: str, output_file_name: str, recognition_res
     return output_file_path
 
 
-def execute_asr(input_folder, output_folder, model_size, language):
+def execute_asr(input_folder, output_folder, model_size, language, backend="classic"):
     input_files, output_file_name = resolve_inputs(input_folder)
-
-    output = []
-
-    model = create_model(language)
+    model = create_model(language, backend=backend)
+    recognition_results: List[Dict[str, str]] = []
 
     for file_name, file_path in tqdm(input_files):
         try:
             print("\n" + file_name)
-            text = model.generate(input=file_path)[0]["text"]
-            output.append(f"{file_path}|{output_file_name}|{language.upper()}|{text}")
+            text = transcribe_with_model(model, file_path)
+            recognition_results.append(
+                {
+                    "audio_path": file_path,
+                    "speaker": output_file_name,
+                    "language": language.upper(),
+                    "text": text,
+                }
+            )
         except Exception:
             print(traceback.format_exc())
 
-    recognition_results = []
-    for line in output:
-        audio_path, speaker, recognized_language, text = line.split("|", maxsplit=3)
-        recognition_results.append(
-            {
-                "audio_path": audio_path,
-                "speaker": speaker,
-                "language": recognized_language,
-                "text": text,
-            }
-        )
     return write_output_file(output_folder, output_file_name, recognition_results)
 
 
@@ -184,7 +231,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output_folder", type=str, required=True, help="Output folder to store transcriptions.")
     parser.add_argument("-s", "--model_size", type=str, default="large", help="Model Size of FunASR is Large")
     parser.add_argument(
-        "-l", "--language", type=str, default="zh", choices=["zh", "yue", "auto"], help="Language of the audio files."
+        "-l", "--language", type=str, default="zh", choices=["zh", "yue", "ja", "en", "ko", "auto"], help="Language of the audio files."
     )
     parser.add_argument(
         "-p", "--precision", type=str, default="float16", choices=["float16", "float32"], help="fp16 or fp32"
@@ -192,10 +239,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "-n", "--name", type=str, default=None, help="Output name for the transcription file."
     )
+    parser.add_argument(
+        "-b",
+        "--backend",
+        type=str,
+        default="classic",
+        choices=SUPPORTED_BACKENDS,
+        help="FunASR backend: classic Paraformer, Fun-ASR-Nano, or SenseVoice.",
+    )
     cmd = parser.parse_args()
     execute_asr(
         input_folder=cmd.input_folder,
         output_folder=cmd.output_folder,
         model_size=cmd.model_size,
         language=cmd.language,
+        backend=cmd.backend,
     )
