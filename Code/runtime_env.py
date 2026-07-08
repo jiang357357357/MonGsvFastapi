@@ -110,6 +110,101 @@ def _missing_ffmpeg_message(root: Path) -> str:
     return "\n".join(lines)
 
 
+def _english_text_resource_paths(root: Path) -> tuple[Path, ...]:
+    text_root = root / "GPT_SoVITS" / "text"
+    return (
+        text_root / "cmudict.rep",
+        text_root / "cmudict-fast.rep",
+        text_root / "engdict-hot.rep",
+    )
+
+
+def _missing_english_text_resource_message(root: Path, missing: Iterable[Path]) -> str:
+    rel_missing = [str(path.relative_to(root)) if path.is_relative_to(root) else str(path) for path in missing]
+    lines = [
+        "英文合成运行时资源不完整，GPT-SoVITS 英文 G2P 无法工作。",
+        "缺少以下源词典文件：",
+        *[f"  - {item}" for item in rel_missing],
+        "这些文件应随仓库一起发布；如果远程是旧部署，请先拉取最新代码或同步 GPT_SoVITS/text 下的英文词典文件。",
+    ]
+    return "\n".join(lines)
+
+
+def _ensure_nltk_resource(
+    resource_path: str,
+    package_name: str,
+    *,
+    auto_download: bool,
+    verbose: bool,
+) -> None:
+    import nltk
+    import nltk.data
+
+    try:
+        nltk.data.find(resource_path)
+        if verbose:
+            print(f"[runtime] NLTK 资源已存在: {resource_path}")
+        return
+    except LookupError:
+        pass
+
+    if not auto_download:
+        raise RuntimeError(f"缺少 NLTK 资源: {resource_path}")
+
+    if verbose:
+        print(f"[runtime] 正在下载 NLTK 资源: {package_name}")
+    if not nltk.download(package_name, quiet=not verbose):
+        raise RuntimeError(f"无法下载 NLTK 资源: {package_name}")
+    nltk.data.find(resource_path)
+
+
+def ensure_gpt_sovits_english_runtime(
+    root: Path | None = None,
+    *,
+    strict: bool = False,
+    auto_download_nltk: bool = True,
+    verbose: bool = False,
+) -> bool:
+    """确保 GPT-SoVITS 英文文本处理资源可用。"""
+    root = repo_root(root)
+    missing = [path for path in _english_text_resource_paths(root) if not path.is_file()]
+    if missing:
+        message = _missing_english_text_resource_message(root, missing)
+        if strict:
+            raise RuntimeError(message)
+        if verbose:
+            print(f"[runtime] {message}")
+        return False
+
+    nltk_requirements = (
+        ("taggers/averaged_perceptron_tagger_eng", "averaged_perceptron_tagger_eng"),
+        ("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger"),
+        ("corpora/cmudict", "cmudict"),
+    )
+    for resource_path, package_name in nltk_requirements:
+        try:
+            _ensure_nltk_resource(
+                resource_path,
+                package_name,
+                auto_download=auto_download_nltk,
+                verbose=verbose,
+            )
+        except Exception as exc:
+            message = (
+                "英文合成需要 NLTK 英文分词/词典资源，但当前环境缺失且无法自动补齐。\n"
+                f"缺失资源: {resource_path}\n"
+                f"安装包名: {package_name}\n"
+                f"原始错误: {exc}"
+            )
+            if strict:
+                raise RuntimeError(message) from exc
+            if verbose:
+                print(f"[runtime] {message}")
+            return False
+
+    return True
+
+
 def ensure_audio_runtime(
     root: Path | None = None,
     *,
