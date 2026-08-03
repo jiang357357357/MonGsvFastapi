@@ -172,6 +172,7 @@ EXCLUDE_PATTERNS=
     Data/DB
     Data/Media
     Data/Static
+    Resources/Train
     logs
     *.tar.gz
     *.7z

@@ -1138,11 +1138,11 @@ requires-dist = [
     { name = "split-lang" },
     { name = "tensorboard" },
     { name = "tojyutping" },
-    { name = "torch", index = "file:///D:/code/model/MonGsvFastapi/down/torch" },
-    { name = "torchaudio", index = "file:///D:/code/model/MonGsvFastapi/down/torch" },
+    { name = "torch", index = "file:///D:/code/model/MonGsvFastapi/Env/OfflinePy/wheels" },
+    { name = "torchaudio", index = "file:///D:/code/model/MonGsvFastapi/Env/OfflinePy/wheels" },
     { name = "torchcodec" },
     { name = "torchmetrics", specifier = "<=1.5" },
-    { name = "torchvision", index = "file:///D:/code/model/MonGsvFastapi/down/torch" },
+    { name = "torchvision", index = "file:///D:/code/model/MonGsvFastapi/Env/OfflinePy/wheels" },
     { name = "tqdm" },
     { name = "transformers", specifier = ">=4.43,<=4.50" },
     { name = "triton", marker = "sys_platform != 'win32'" },
@@ -3184,7 +3184,7 @@ wheels = [
 [[package]]
 name = "torch"
 version = "2.11.0+cu128"
-source = { registry = "down/torch" }
+source = { registry = "Env/OfflinePy/wheels" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
@@ -3214,7 +3214,7 @@ wheels = [
 [[package]]
 name = "torchaudio"
 version = "2.11.0+cu128"
-source = { registry = "down/torch" }
+source = { registry = "Env/OfflinePy/wheels" }
 wheels = [
     { path = "torchaudio-2.11.0+cu128-cp310-cp310-win_amd64.whl" },
 ]
@@ -3248,7 +3248,7 @@ wheels = [
 [[package]]
 name = "torchvision"
 version = "0.26.0+cu128"
-source = { registry = "down/torch" }
+source = { registry = "Env/OfflinePy/wheels" }
 dependencies = [
     { name = "numpy" },
     { name = "pillow" },

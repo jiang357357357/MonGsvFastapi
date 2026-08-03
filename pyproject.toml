@@ -67,12 +67,16 @@ dependencies = [
   "silero-vad>=5.1",
 ]
 
+[tool.uv]
+find-links = ["Env/OfflinePy/wheels"]
+
 [[tool.uv.index]]
 name = "aliyun"
 url = "https://mirrors.aliyun.com/pypi/simple/"
 
-# 本地 PyTorch wheel 目录。
-# 使用前请先确认 down/torch 里放的是 Python 3.10 对应的 cp310 wheel。
+# 本地离线 wheel 目录。
+# PyTorch 与其余离线依赖统一存放在 Env/OfflinePy/wheels，避免维护重复副本。
+# 使用前请先确认目录中放的是 Python 3.10 对应的 cp310 wheel。
 # 如果当前 .venv 已经装过旧的 torch / torchaudio / torchvision，
 # 先在虚拟环境里执行：
 #   uv pip uninstall --python .venv\Scripts\python.exe torch torchaudio torchvision
@@ -81,7 +85,7 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 #   uv sync --link-mode=copy
 [[tool.uv.index]]
 name = "pytorch-local"
-url = "down/torch"
+url = "Env/OfflinePy/wheels"
 format = "flat"
 explicit = true
 

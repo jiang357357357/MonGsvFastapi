@@ -68,6 +68,247 @@ function Find-7Zip {
     return $null
 }
 
+function Invoke-Git {
+    param(
+        [string]$WorkingDirectory,
+        [string[]]$ArgumentList
+    )
+
+    & git -C $WorkingDirectory @ArgumentList
+    if ($LASTEXITCODE -ne 0) {
+        throw "Git command failed with code ${LASTEXITCODE}: git -C `"$WorkingDirectory`" $($ArgumentList -join ' ')"
+    }
+}
+
+function Get-GitValue {
+    param(
+        [string]$WorkingDirectory,
+        [string[]]$ArgumentList
+    )
+
+    $output = @(& git -C $WorkingDirectory @ArgumentList 2>$null)
+    $exitCode = $LASTEXITCODE
+    $value = $output | Select-Object -First 1
+    if ($exitCode -ne 0 -or [string]::IsNullOrWhiteSpace($value)) {
+        throw "Could not read Git value: git -C `"$WorkingDirectory`" $($ArgumentList -join ' ')"
+    }
+    return $value.Trim()
+}
+
+function Convert-ToFileUri {
+    param([string]$Path)
+
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    if (-not $resolved.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $resolved += [System.IO.Path]::DirectorySeparatorChar
+    }
+    return ([uri]$resolved).AbsoluteUri
+}
+
+function Copy-WorkingTreeOverlay {
+    param(
+        [string]$Source,
+        [string]$Destination,
+        [string[]]$Patterns
+    )
+
+    $excludeDirectories = New-Object System.Collections.Generic.List[string]
+    $excludeDirectories.Add(".git")
+    foreach ($pattern in $Patterns) {
+        $excludeDirectories.Add($pattern.Replace("/", "\"))
+    }
+
+    $arguments = @(
+        $Source,
+        $Destination,
+        "/E",
+        "/COPY:DAT",
+        "/DCOPY:DAT",
+        "/R:2",
+        "/W:1",
+        "/NFL",
+        "/NDL",
+        "/NJH",
+        "/NJS",
+        "/NP",
+        "/XD"
+    )
+    $arguments += $excludeDirectories.ToArray()
+    $arguments += "/XF"
+    $arguments += $Patterns
+
+    & robocopy @arguments | Out-Null
+    if ($LASTEXITCODE -gt 7) {
+        throw "Working-tree overlay failed with robocopy code $LASTEXITCODE."
+    }
+}
+
+function Apply-WorkingTreeDiff {
+    param(
+        [string]$Source,
+        [string]$Destination,
+        [string[]]$ExcludedPaths = @()
+    )
+
+    $patchFile = Join-Path $env:TEMP ("mongsv_worktree_{0}.patch" -f ([guid]::NewGuid().ToString("N")))
+    try {
+        $arguments = @("diff", "--binary", "HEAD", "--output=$patchFile", "--", ".")
+        foreach ($path in $ExcludedPaths) {
+            $arguments += ":(exclude)$path"
+        }
+        Invoke-Git -WorkingDirectory $Source -ArgumentList $arguments
+
+        if ((Test-Path -LiteralPath $patchFile -PathType Leaf) -and (Get-Item -LiteralPath $patchFile).Length -gt 0) {
+            Invoke-Git -WorkingDirectory $Destination -ArgumentList @("apply", "--binary", "--whitespace=nowarn", $patchFile)
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $patchFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-CleanTrackedWorkingTree {
+    param(
+        [string]$WorkingDirectory,
+        [string]$DisplayName,
+        [switch]$IgnoreDirtySubmodules
+    )
+
+    $arguments = @("status", "--porcelain", "--untracked-files=no")
+    if ($IgnoreDirtySubmodules) {
+        $arguments += "--ignore-submodules=dirty"
+    }
+    $changes = @(& git -C $WorkingDirectory @arguments)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "Could not inspect tracked changes in $DisplayName."
+    }
+    if ($changes.Count -gt 0) {
+        $summary = ($changes | Select-Object -First 10) -join [Environment]::NewLine
+        throw @"
+$DisplayName contains uncommitted tracked changes. Commit them before building an updateable release package.
+$summary
+"@
+    }
+}
+
+function New-ShallowReleaseTree {
+    param(
+        [string]$Source,
+        [string]$Destination,
+        [string[]]$Patterns
+    )
+
+    $git = Get-Command "git.exe" -ErrorAction SilentlyContinue
+    if (-not $git) {
+        $git = Get-Command "git" -ErrorAction SilentlyContinue
+    }
+    if (-not $git) {
+        throw "Could not find Git. A shallow release repository cannot be created."
+    }
+
+    $insideWorkTree = Get-GitValue -WorkingDirectory $Source -ArgumentList @("rev-parse", "--is-inside-work-tree")
+    if ($insideWorkTree -ne "true") {
+        throw "Source directory is not a Git working tree: $Source"
+    }
+    $branch = Get-GitValue -WorkingDirectory $Source -ArgumentList @("branch", "--show-current")
+    $commit = Get-GitValue -WorkingDirectory $Source -ArgumentList @("rev-parse", "HEAD")
+    $origin = Get-GitValue -WorkingDirectory $Source -ArgumentList @("remote", "get-url", "origin")
+    $sourceUri = Convert-ToFileUri -Path $Source
+
+    Assert-CleanTrackedWorkingTree `
+        -WorkingDirectory $Source `
+        -DisplayName "Main repository" `
+        -IgnoreDirtySubmodules
+
+    Write-Host "[Git] Creating shallow release repository..." -ForegroundColor Cyan
+    & $git.Source clone --quiet --depth 1 --branch $branch --no-recurse-submodules $sourceUri $Destination
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not create shallow release repository (git clone exit $LASTEXITCODE)."
+    }
+    Invoke-Git -WorkingDirectory $Destination -ArgumentList @("remote", "set-url", "origin", $origin)
+
+    $stagedSubmodules = New-Object System.Collections.Generic.List[object]
+    $submoduleLines = & git -C $Source config --file .gitmodules --get-regexp "^submodule\..*\.path$" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($line in $submoduleLines) {
+            if ($line -notmatch "^(\S+)\s+(.+)$") {
+                continue
+            }
+
+            $pathKey = $Matches[1]
+            $relativePath = $Matches[2].Trim()
+            $submoduleName = $pathKey.Substring("submodule.".Length)
+            $submoduleName = $submoduleName.Substring(0, $submoduleName.Length - ".path".Length)
+            $submoduleSource = Join-Path $Source $relativePath
+            $submoduleDestination = Join-Path $Destination $relativePath
+            if (-not (Test-Path -LiteralPath $submoduleSource -PathType Container)) {
+                throw "Submodule working tree does not exist: $submoduleSource"
+            }
+
+            $submoduleCommit = Get-GitValue -WorkingDirectory $Source -ArgumentList @("rev-parse", "HEAD:$relativePath")
+            $submoduleBranch = Get-GitValue -WorkingDirectory $submoduleSource -ArgumentList @("branch", "--show-current")
+            $submoduleOrigin = (& git -C $Source config --file .gitmodules --get "submodule.$submoduleName.url").Trim()
+            $submoduleUri = Convert-ToFileUri -Path $submoduleSource
+
+            Assert-CleanTrackedWorkingTree `
+                -WorkingDirectory $submoduleSource `
+                -DisplayName ("Submodule {0}" -f $relativePath)
+
+            if (Test-Path -LiteralPath $submoduleDestination) {
+                Remove-Item -LiteralPath $submoduleDestination -Recurse -Force
+            }
+            $submoduleParent = Split-Path -Parent $submoduleDestination
+            New-Item -ItemType Directory -Path $submoduleParent -Force | Out-Null
+
+            & $git.Source clone --quiet --depth 1 --branch $submoduleBranch $submoduleUri $submoduleDestination
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not shallow-clone submodule: $relativePath"
+            }
+            if ((Get-GitValue -WorkingDirectory $submoduleDestination -ArgumentList @("rev-parse", "HEAD")) -ne $submoduleCommit) {
+                Invoke-Git -WorkingDirectory $submoduleDestination -ArgumentList @("fetch", "--depth", "1", "origin", $submoduleCommit)
+                Invoke-Git -WorkingDirectory $submoduleDestination -ArgumentList @("checkout", "--detach", $submoduleCommit)
+            }
+            Invoke-Git -WorkingDirectory $submoduleDestination -ArgumentList @("remote", "set-url", "origin", $submoduleOrigin)
+            $stagedSubmodules.Add([pscustomobject]@{
+                RelativePath = $relativePath
+                Source = $submoduleSource
+                Destination = $submoduleDestination
+                Commit = $submoduleCommit
+            })
+        }
+    }
+
+    Copy-WorkingTreeOverlay -Source $Source -Destination $Destination -Patterns $Patterns
+
+    # Robocopy also overlays tracked files. Restore them first so line-ending or
+    # timestamp differences cannot create phantom modifications, then apply only
+    # the real tracked changes from each source working tree.
+    Invoke-Git -WorkingDirectory $Destination -ArgumentList @("reset", "--hard", "HEAD")
+    foreach ($submodule in $stagedSubmodules) {
+        Invoke-Git -WorkingDirectory $submodule.Destination -ArgumentList @("reset", "--hard", $submodule.Commit)
+    }
+
+    Apply-WorkingTreeDiff `
+        -Source $Source `
+        -Destination $Destination `
+        -ExcludedPaths @($stagedSubmodules | ForEach-Object { $_.RelativePath })
+    foreach ($submodule in $stagedSubmodules) {
+        Apply-WorkingTreeDiff -Source $submodule.Source -Destination $submodule.Destination
+    }
+
+    $stagedCommit = Get-GitValue -WorkingDirectory $Destination -ArgumentList @("rev-parse", "HEAD")
+    if ($stagedCommit -ne $commit) {
+        throw "Shallow release repository points to an unexpected commit: $stagedCommit"
+    }
+
+    Write-Host ("[Git] Branch: {0}" -f $branch) -ForegroundColor Green
+    Write-Host ("[Git] Commit: {0}" -f $commit) -ForegroundColor Green
+    Write-Host ("[Git] Origin: {0}" -f $origin) -ForegroundColor Green
+    Write-Host "[Git] Local working-tree changes and runtime assets were overlaid." -ForegroundColor Green
+    Write-Host ""
+}
+
 function Get-PackExcludePatterns {
     param([string]$ConfigPath)
 
@@ -129,7 +370,7 @@ function Show-Help {
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  -OutputFile <file>   Output archive path"
-    Write-Host "  -SourceDir <dir>     Source directory, defaults to workspace root"
+    Write-Host "  -SourceDir <dir>     Git working tree to package, defaults to workspace root"
     Write-Host "  -UseTar              Build tar.gz instead of 7z"
     Write-Host "  -SkipFrontendBuild   Do not run npm build before packing"
     Write-Host "  -Help, -h            Show help"
@@ -300,6 +541,18 @@ if ($outputParent) {
 
 $excludeFile = Join-Path $env:TEMP ("mongsv_pack_exclude_{0}.txt" -f ([guid]::NewGuid().ToString("N")))
 $patterns | Set-Content -LiteralPath $excludeFile -Encoding UTF8
+$stagingParent = Join-Path $env:TEMP ("mongsv_release_{0}" -f ([guid]::NewGuid().ToString("N")))
+$packSourceDir = Join-Path $stagingParent (Split-Path -Leaf $SourceDir)
+
+New-Item -ItemType Directory -Path $stagingParent -Force | Out-Null
+try {
+    New-ShallowReleaseTree -Source $SourceDir -Destination $packSourceDir -Patterns $patterns
+}
+catch {
+    Remove-Item -LiteralPath $stagingParent -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $excludeFile -Force -ErrorAction SilentlyContinue
+    throw
+}
 
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Cyan
@@ -307,6 +560,7 @@ Write-Host "  MonGSV Project Packer (Windows)" -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host ("  Source: {0}" -f $SourceDir) -ForegroundColor White
+Write-Host ("  Staged: {0}" -f $packSourceDir) -ForegroundColor White
 Write-Host ("  Config: {0}" -f $monconfigPath) -ForegroundColor White
 Write-Host ("  Output: {0}" -f $OutputFile) -ForegroundColor White
 if ($UseTar) {
@@ -319,7 +573,7 @@ Write-Host ("  Excludes: {0}" -f $patterns.Count) -ForegroundColor White
 Write-Host ("  7-Zip: {0}" -f $sevenZipPath) -ForegroundColor White
 Write-Host ""
 
-Show-TopLevelExclusions -Root $SourceDir -Patterns $patterns
+Show-TopLevelExclusions -Root $packSourceDir -Patterns $patterns
 
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -329,7 +583,7 @@ try {
         New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
         try {
-            $tempTar = Join-Path $tempDir ((Split-Path -Leaf $SourceDir) + ".tar")
+            $tempTar = Join-Path $tempDir ((Split-Path -Leaf $packSourceDir) + ".tar")
 
             $tarArgs = @(
                 "a",
@@ -339,7 +593,7 @@ try {
                 "-scsUTF-8",
                 "-xr@$excludeFile",
                 $tempTar,
-                "$SourceDir\*"
+                "$packSourceDir\*"
             )
 
             Write-Host "Building tar..." -ForegroundColor Yellow
@@ -371,7 +625,7 @@ try {
             "-scsUTF-8",
             "-xr@$excludeFile",
             $OutputFile,
-            "$SourceDir\*"
+            "$packSourceDir\*"
         )
 
         Write-Host "Packing archive..." -ForegroundColor Yellow
@@ -398,4 +652,5 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $excludeFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stagingParent -Recurse -Force -ErrorAction SilentlyContinue
 }
