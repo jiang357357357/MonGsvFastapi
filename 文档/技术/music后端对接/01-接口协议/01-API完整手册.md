@@ -274,16 +274,16 @@ CNHuBERT 语义编码。
 | `text_language` | string | 否 | `"zh"` | 目标文本语言 |
 | `world_id` | int | 否 | `null` | 世界 ID；传入时后端会校验角色是否属于该世界 |
 | `version` | string | 否 | `null` | 版本；传入时后端会校验角色是否属于该版本 |
-| `how_to_cut` | string | 否 | `"凑四句一切"` | 文本切分方式 |
-| `top_k` | int | 否 | `20` | Top-K 采样 |
-| `top_p` | float | 否 | `0.6` | Top-P 采样 |
-| `temperature` | float | 否 | `0.6` | 温度参数 |
+| `how_to_cut` | string | 否 | `"按标点符号切"` | 文本切分方式 |
+| `top_k` | int | 否 | `15` | Top-K 采样 |
+| `top_p` | float | 否 | `1.0` | Top-P 采样 |
+| `temperature` | float | 否 | `1.0` | 温度参数 |
 | `speed` | float | 否 | `1.0` | 语速 |
-| `sample_steps` | int | 否 | `8` | 采样步数 |
+| `sample_steps` | int | 否 | `32` | 采样步数 |
 | `if_sr` | bool | 否 | `false` | 启用音频超分 |
 | `ref_free` | bool | 否 | `false` | 无参考模式 |
-| `if_freeze` | bool | 否 | `false` | 冻结缓存 |
-| `pause_second` | float | 否 | `0.3` | 句间停顿(秒) |
+| `if_freeze` | bool | 否 | `false` | 兼容保留字段；当前新推理管线尚未实现冻结缓存 |
+| `pause_second` | float | 否 | `0.3` | 句间停顿（秒），当前已接入官方 `fragment_interval` |
 | `inference_mode` | string | 否 | `"normal"` | 推理模式：`normal` 普通推理，`accelerated` 加速推理 |
 | `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
 
@@ -307,7 +307,7 @@ CNHuBERT 语义编码。
   "text": "博士，今天也辛苦了。",
   "text_language": "zh",
   "speed": 1.0,
-  "how_to_cut": "凑四句一切",
+  "how_to_cut": "按标点符号切",
   "inference_mode": "normal"
 }
 ```
@@ -337,6 +337,15 @@ CNHuBERT 语义编码。
 ### WebSocket /ws/tts/stream
 
 流式文本转语音。适合 LLM delta、长文本和实时对话场景。调用方发送文本流，后端按标点、长度和 flush/finish 切成 TTS 片段，并按顺序返回音频块。
+
+当前 WebSocket 固定调用底层 `streaming_mode=true`、`return_fragment=false`，对应官方模式 2（语义 Token 分块流式）。它不是官方模式 1，客户端目前也不能在 `start` 消息中选择模式 0/1/2/3。
+
+| 官方模式 | 当前外部入口 | 状态 |
+|---------:|--------------|------|
+| 0 | `POST /api/synthesis/role-emotion`、`POST /inference/tts` | 已开放，完整音频一次返回 |
+| 1 | 无 | 底层已验证可用，对外接口尚未开放 |
+| 2 | `WS /ws/tts/stream` | 已开放，PCM 分块返回 |
+| 3 | 无 | 底层官方支持，对外接口尚未开放 |
 
 **连接地址：**
 
@@ -391,7 +400,7 @@ ws://host:40302/ws/tts/stream
 
 **已验证：**
 
-远程 `10.8.0.4:40302` 使用 `role_id=1922493701`、`emotion=平常` 测试通过。两段文本返回 2 个音频片段、6 个二进制 PCM 块，总计 `373760` bytes。
+远程 `10.8.0.4:40302` 已通过端到端测试。`role_id` 由角色目录计算，部署内容变化后可能改变，测试前必须通过 `GET /api/role/list/` 动态获取，不要在调用方硬编码文档中的历史 ID。
 
 ### POST /inference/models/load
 
@@ -433,26 +442,26 @@ ws://host:40302/ws/tts/stream
 | `ref_audio_path` | string | 二选一 | `""` | 参考音频路径 |
 | `prompt_text` | string | 否 | `""` | 参考文本 |
 | `prompt_language` | string | 否 | `"zh"` | 参考文本语言 |
-| `how_to_cut` | string | 否 | `"凑四句一切"` | 文本切分方式 |
-| `top_k` | int | 否 | `20` | Top-K 采样 |
-| `top_p` | float | 否 | `0.6` | Top-P 采样 |
-| `temperature` | float | 否 | `0.6` | 温度参数 |
+| `how_to_cut` | string | 否 | `"按标点符号切"` | 文本切分方式 |
+| `top_k` | int | 否 | `15` | Top-K 采样 |
+| `top_p` | float | 否 | `1.0` | Top-P 采样 |
+| `temperature` | float | 否 | `1.0` | 温度参数 |
 | `speed` | float | 否 | `1.0` | 语速 |
-| `sample_steps` | int | 否 | `8` | 采样步数 |
+| `sample_steps` | int | 否 | `32` | 采样步数 |
 | `if_sr` | bool | 否 | `false` | 启用音频超分 |
 | `ref_free` | bool | 否 | `false` | 无参考模式 |
-| `if_freeze` | bool | 否 | `false` | 冻结缓存 |
-| `pause_second` | float | 否 | `0.3` | 句间停顿(秒) |
+| `if_freeze` | bool | 否 | `false` | 兼容保留字段；当前新推理管线尚未实现冻结缓存 |
+| `pause_second` | float | 否 | `0.3` | 句间停顿（秒），当前已接入官方 `fragment_interval` |
 | `inference_mode` | string | 否 | `"normal"` | 推理模式：`normal` 普通推理，`accelerated` 加速推理 |
 | `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
 
 **how_to_cut 可选值：**
 - `"不切"` / `"cut0"` — 不切分
-- `"凑四句一切"` / `"cut1"` — 每四句一切（默认）
+- `"凑四句一切"` / `"cut1"` — 每四句一切
 - `"凑50字一切"` / `"cut2"` — 每50字一切
 - `"按中文句号。切"` / `"cut3"` — 按句号切
 - `"按英文句号.切"` / `"cut4"` — 按英文句号切
-- `"按标点符号切"` / `"cut5"` — 按标点切
+- `"按标点符号切"` / `"cut5"` — 按标点切（默认）
 
 **text_language 可选值：**
 `auto`, `auto_yue`, `zh`, `en`, `ja`, `yue`, `ko`, `all_zh`, `all_ja`, `all_yue`, `all_ko`
@@ -462,6 +471,8 @@ ws://host:40302/ws/tts/stream
 `inference_mode=normal` 使用普通推理，是默认值。`inference_mode=accelerated` 会尝试使用 CUDA Graph 加速 T2S 语义 token 预测阶段，仅建议在 CUDA 服务端、非 streaming、非 ref_free、单条普通推理时启用；初始化或推理失败时后端会输出 `[cuda-graph]` 日志并自动回退普通推理。
 
 旧字段 `use_cuda_graph` 和 `cuda_graph_mode` 已废弃，不再作为外部接口参数使用。
+
+这里的 `inference_mode` 只表示普通推理或 CUDA Graph 加速，与官方流式档位 `streaming_mode=0/1/2/3` 不是同一个参数。当前两个 HTTP 接口均按模式 0 返回完整结果。
 
 **响应示例（return_base64=true）：**
 ```json
@@ -912,9 +923,28 @@ ws://host:40302/ws/asr/transcribe
     { "step": "semantic_encoding", "result": { ... } }
   ],
   "training_started": false,
+  "training_workflow": null,
   "next_action": "可以开始训练模型"
 }
 ```
+
+当 `start_training=true` 时，接口只负责完成预处理并把训练工作流加入后台队列，不会等待全部 epoch 完成。响应中的 `training_workflow` 是可直接轮询的工作流快照：
+
+```json
+{
+  "workflow_id": "training_workflow_0123456789ab",
+  "status": "queued",
+  "order": ["sovits", "gpt"],
+  "current_target": null,
+  "targets": [
+    {"target": "sovits", "status": "pending", "job_id": null, "error": null},
+    {"target": "gpt", "status": "pending", "job_id": null, "error": null}
+  ],
+  "error": null
+}
+```
+
+保存 `workflow_id`，再通过下面的状态接口轮询。前一个训练目标只有在状态为 `completed` 后，后一个目标才会启动；失败或停止都会中断后续训练。
 
 ### POST /workflow/training/full
 
@@ -925,6 +955,55 @@ ws://host:40302/ws/asr/transcribe
 | `audio_files` | file[] | 否 | - | 直接上传多个音频文件 |
 
 其他参数与 `/workflow/complete` 相同，`start_training` 固定为 `true`。
+
+### GET /workflow/training/status/{workflow_id}
+
+查询后台顺序训练工作流状态。
+
+**响应示例：**
+
+```json
+{
+  "workflow_id": "training_workflow_0123456789ab",
+  "project_name": "my_project",
+  "project_root": "/output/my_project",
+  "version": "v2Pro",
+  "order": ["sovits", "gpt"],
+  "status": "running",
+  "current_target": "sovits",
+  "targets": [
+    {
+      "target": "sovits",
+      "job_id": "sovits_20260805_123456",
+      "launch": {"success": true, "status": "running"},
+      "status": "running",
+      "details": null,
+      "error": null
+    },
+    {
+      "target": "gpt",
+      "job_id": null,
+      "launch": null,
+      "status": "pending",
+      "details": null,
+      "error": null
+    }
+  ],
+  "error": null
+}
+```
+
+工作流状态值：`queued` / `running` / `completed` / `failed` / `stopped`。目标状态还可能是 `pending` 或 `starting`。子进程异常退出时，目标的 `error` 和工作流的 `error` 会包含日志末尾的实际错误。
+
+### POST /workflow/training/stop/{workflow_id}
+
+停止排队中或运行中的完整训练工作流。正在运行的 GPT/SoVITS 子进程会被终止，后续目标不会启动。接口返回停止后的完整工作流状态；对已经结束的工作流重复调用是幂等的。
+
+注意：
+
+- 完整工作流通过全局锁串行执行，同一时间只运行一个完整训练工作流。
+- 手动调用 `/training/gpt/start` 或 `/training/sovits/start` 不受该工作流锁约束。
+- 工作流状态目前保存在进程内存中；后端重启后，历史 `workflow_id` 无法继续查询。
 
 ### POST /batch/projects
 

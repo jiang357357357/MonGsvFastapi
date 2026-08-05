@@ -81,7 +81,7 @@ curl -X POST "http://localhost:40302/api/synthesis/role-emotion" \
     "text": "博士，今天也辛苦了。",
     "text_language": "zh",
     "speed": 1.0,
-    "how_to_cut": "凑四句一切",
+    "how_to_cut": "按标点符号切",
     "inference_mode": "normal",
     "return_base64": true
   }' \
@@ -146,12 +146,12 @@ curl -X POST "http://localhost:40302/inference/tts" \
   -F "ref_audio=@/path/to/reference.wav" \
   -F "prompt_text=参考音频的文本内容。" \
   -F "prompt_language=zh" \
-  -F "how_to_cut=凑四句一切" \
-  -F "top_k=20" \
-  -F "top_p=0.6" \
-  -F "temperature=0.6" \
+  -F "how_to_cut=按标点符号切" \
+  -F "top_k=15" \
+  -F "top_p=1.0" \
+  -F "temperature=1.0" \
   -F "speed=1.0" \
-  -F "sample_steps=8" \
+  -F "sample_steps=32" \
   -F "inference_mode=normal" \
   -F "return_base64=true" \
   -o tts_response.json
@@ -416,6 +416,21 @@ curl -X POST "http://localhost:40302/workflow/training/full" \
   -F "audio_files=@/path/to/audio2.wav"
 ```
 
+两个训练工作流接口都会在预处理完成、训练排队后返回。请从响应的 `training_workflow.workflow_id` 中保存工作流 ID，再轮询：
+
+```bash
+curl -s "http://localhost:40302/workflow/training/status/training_workflow_0123456789ab" \
+  | python -m json.tool
+```
+
+只有状态变成 `completed` 才表示所有选中的训练目标均已完成。`failed` 或 `stopped` 表示后续目标不会再启动。停止完整工作流：
+
+```bash
+curl -X POST "http://localhost:40302/workflow/training/stop/training_workflow_0123456789ab"
+```
+
+工作流状态保存在进程内存中，网关重启后不能继续查询旧 ID。
+
 ### 批量处理
 
 ```bash
@@ -588,7 +603,7 @@ async function synthesizeByRoleEmotion({ roleId, emotion, text, worldId, version
       text,
       text_language: 'zh',
       speed: 1.0,
-      how_to_cut: '凑四句一切',
+      how_to_cut: '按标点符号切',
       return_base64: true,
     }),
   });
@@ -640,10 +655,11 @@ async function textToSpeech(text, refAudioBlob, promptText) {
   formData.append('ref_audio', refAudioBlob, 'ref.wav');
   formData.append('prompt_text', promptText || '');
   formData.append('prompt_language', 'zh');
-  formData.append('how_to_cut', '凑四句一切');
-  formData.append('top_k', '20');
-  formData.append('top_p', '0.6');
-  formData.append('temperature', '0.6');
+  formData.append('how_to_cut', '按标点符号切');
+  formData.append('top_k', '15');
+  formData.append('top_p', '1.0');
+  formData.append('temperature', '1.0');
+  formData.append('sample_steps', '32');
   formData.append('speed', '1.0');
   formData.append('return_base64', 'true');
 
@@ -680,6 +696,69 @@ async function main() {
   }
 }
 ```
+
+### TTS 流式 WebSocket（模式 2）
+
+浏览器收到的是 `pcm_s16le / mono` 裸 PCM，不是可直接交给 `<audio>` 的 WAV 文件。下面示例展示协议收发；`enqueuePcmChunk` 应由调用方接入 AudioContext 播放队列。
+
+```javascript
+function startStreamingTTS({ roleId, emotion, text, enqueuePcmChunk }) {
+  const requestId = crypto.randomUUID();
+  const ws = new WebSocket('ws://localhost:40302/ws/tts/stream');
+  ws.binaryType = 'arraybuffer';
+
+  let sampleRate = 32000;
+
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({
+      type: 'start',
+      request_id: requestId,
+      role_id: roleId, // 调用前通过 /api/role/list/ 动态获取
+      emotion,
+      text_language: 'zh',
+      how_to_cut: '按标点符号切',
+      top_k: 15,
+      top_p: 1.0,
+      temperature: 1.0,
+      sample_steps: 32,
+      pause_second: 0.3,
+    }));
+  });
+
+  ws.addEventListener('message', (event) => {
+    if (event.data instanceof ArrayBuffer) {
+      enqueuePcmChunk(new Int16Array(event.data), sampleRate);
+      return;
+    }
+
+    const message = JSON.parse(event.data);
+    if (message.type === 'ready') {
+      ws.send(JSON.stringify({
+        type: 'text',
+        request_id: requestId,
+        text,
+      }));
+      ws.send(JSON.stringify({type: 'finish', request_id: requestId}));
+    } else if (message.type === 'audio_start') {
+      sampleRate = message.sample_rate;
+    } else if (message.type === 'error') {
+      console.error(message.message);
+      ws.close();
+    } else if (message.type === 'end') {
+      ws.close();
+    }
+  });
+
+  return () => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({type: 'cancel', request_id: requestId}));
+    }
+    ws.close();
+  };
+}
+```
+
+当前 WebSocket 固定对应官方模式 2。模式 1 虽然已在底层验证，但尚无公开 HTTP 流式入口。
 
 ### ASR 转录
 

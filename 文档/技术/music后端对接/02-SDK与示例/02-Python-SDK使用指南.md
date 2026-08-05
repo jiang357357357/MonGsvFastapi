@@ -67,7 +67,7 @@ payload = {
     "text": "博士，今天也辛苦了。",
     "text_language": "zh",
     "speed": 1.0,
-    "how_to_cut": "凑四句一切",
+    "how_to_cut": "按标点符号切",
     "return_base64": True,
 }
 
@@ -108,11 +108,12 @@ request = builder.inference_request(
     prompt_text="这是一段参考音频的文本内容。",
     text_language="zh",
     prompt_language="zh",
-    top_k=20,
-    top_p=0.6,
-    temperature=0.6,
+    top_k=15,
+    top_p=1.0,
+    temperature=1.0,
+    sample_steps=32,
     speed=1.0,
-    how_to_cut="凑四句一切",
+    how_to_cut="按标点符号切",
     return_base64=True  # 返回 base64 编码的音频
 )
 
@@ -166,9 +167,10 @@ request = InferenceRequest(
     prompt_text="参考文本",
     prompt_language="zh",
     config=InferenceConfig(
-        top_k=20,
-        top_p=0.6,
-        temperature=0.6,
+        top_k=15,
+        top_p=1.0,
+        temperature=1.0,
+        sample_steps=32,
         speed=1.0,
         how_to_cut="不切"
     ),
@@ -176,6 +178,86 @@ request = InferenceRequest(
 )
 response = client.inference(request)
 ```
+
+当前 HTTP SDK 调用返回完整音频，对应官方模式 0。底层模式 1 已验证可用，但尚未封装成公开 HTTP 流式接口；`/ws/tts/stream` 使用的是官方模式 2，当前 SDK 也尚未提供专用的 TTS WebSocket 客户端。
+
+### TTS WebSocket（模式 2）
+
+在 SDK 增加正式封装前，可以直接使用 `websockets`。`role_id` 和 `emotion` 应先通过资源接口动态获取：
+
+```python
+import asyncio
+import json
+import wave
+
+import websockets
+
+
+async def stream_tts():
+    pcm = bytearray()
+    sample_rate = None
+
+    async with websockets.connect("ws://localhost:40302/ws/tts/stream") as ws:
+        await ws.send(json.dumps({
+            "type": "start",
+            "request_id": "music-tts-001",
+            "role_id": 427041150,  # 示例快照；实际调用前查询 /api/role/list/
+            "emotion": "淡然",
+            "text_language": "zh",
+            "how_to_cut": "按标点符号切",
+            "top_k": 15,
+            "top_p": 1.0,
+            "temperature": 1.0,
+            "sample_steps": 32,
+            "pause_second": 0.3,
+        }, ensure_ascii=False))
+
+        # start 阶段可能先收到 status，等待 ready 后再发送文本。
+        while True:
+            event = json.loads(await ws.recv())
+            if event.get("type") == "ready":
+                break
+            if event.get("type") == "error":
+                raise RuntimeError(event.get("message"))
+
+        await ws.send(json.dumps({
+            "type": "text",
+            "request_id": "music-tts-001",
+            "text": "老师，今天需要处理的工作已经整理完毕。请您按顺序确认。",
+        }, ensure_ascii=False))
+        await ws.send(json.dumps({
+            "type": "finish",
+            "request_id": "music-tts-001",
+        }))
+
+        while True:
+            message = await ws.recv()
+            if isinstance(message, bytes):
+                pcm.extend(message)
+                continue
+
+            event = json.loads(message)
+            if event.get("type") == "audio_start":
+                sample_rate = int(event["sample_rate"])
+            elif event.get("type") == "error":
+                raise RuntimeError(event.get("message"))
+            elif event.get("type") == "end":
+                break
+
+    if not sample_rate:
+        raise RuntimeError("服务端没有返回音频")
+
+    with wave.open("stream_output.wav", "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(pcm)
+
+
+asyncio.run(stream_tts())
+```
+
+示例为了便于验证而在结束后写 WAV。实时播放时，应在收到每个二进制 PCM 块后立即放入播放队列，不要等待 `end`。
 
 ## 模型管理
 
@@ -314,6 +396,40 @@ response = client.complete_workflow(request)
 for step in response.steps:
     print(f"{step['step']}: {'成功' if step['result'].get('success') else '失败'}")
 ```
+
+如果工作流启用了训练，HTTP 请求会在训练排队后返回，不会等待全部 epoch 完成。当前 SDK 尚未封装顺序训练工作流状态方法，可以直接请求网关：
+
+```python
+import time
+import requests
+
+# 从启动完整训练接口返回的原始 JSON 中取得
+workflow_result = requests.post(
+    "http://localhost:40302/workflow/complete",
+    data={
+        "project_name": "my_project",
+        "input_audio_dir": "/data/audio/raw",
+        "output_dir": "/data/output",
+        "start_training": True,
+    },
+    timeout=3600,
+).json()
+workflow_id = workflow_result["training_workflow"]["workflow_id"]
+
+while True:
+    result = requests.get(
+        f"http://localhost:40302/workflow/training/status/{workflow_id}",
+        timeout=30,
+    ).json()
+    print(result["status"], result.get("current_target"))
+    if result["status"] in {"completed", "failed", "stopped"}:
+        break
+    time.sleep(30)
+```
+
+该状态保存在网关进程内存中；后端重启后不能继续查询旧 `workflow_id`。
+
+停止整个工作流时请求 `POST /workflow/training/stop/{workflow_id}`；它会同时终止当前训练子进程并阻止后续目标启动。
 
 ## 批量处理
 

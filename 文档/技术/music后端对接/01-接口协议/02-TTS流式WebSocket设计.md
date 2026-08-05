@@ -20,6 +20,17 @@ ws://host:40302/ws/tts/stream
 | `POST /inference/tts` | 已知模型与参考音频的完整合成 | 完整 wav/base64 |
 | `WS /ws/tts/stream` | LLM delta、长文本、实时对话 | 分段音频 chunk |
 
+当前外部能力与官方流式档位的对应关系：
+
+| 官方模式 | 当前入口 | 说明 |
+|---------:|----------|------|
+| 0 | 两个 HTTP TTS 接口 | 全部合成后一次返回 |
+| 1 | 暂无外部入口 | 底层可用；完整片段合成后分块返回 |
+| 2 | 本 WebSocket | 语义 Token 分块流式 |
+| 3 | 暂无外部入口 | 底层官方支持，当前未接入 |
+
+因此，本接口中的“流式”目前明确指模式 2。`start` 消息尚不接受 `streaming_mode=0/1/2/3`；未知字段不会用于切换底层档位。
+
 ## 2. 核心原则
 
 1. 调用方只负责发送文本，不负责切句。
@@ -44,14 +55,17 @@ ws://host:40302/ws/tts/stream
   "world_id": 1,
   "version": "v2ProPlus",
   "text_language": "zh",
-  "how_to_cut": "不切",
+  "how_to_cut": "按标点符号切",
   "speed": 1.0,
-  "top_k": 20,
-  "top_p": 0.6,
-  "temperature": 0.6,
-  "sample_steps": 8
+  "top_k": 15,
+  "top_p": 1.0,
+  "temperature": 1.0,
+  "sample_steps": 32,
+  "pause_second": 0.3
 }
 ```
+
+未提供时使用上面列出的默认值。`pause_second` 已生效，并映射到底层 `fragment_interval`；显式传 `0` 表示不插入句间静音。`if_freeze` 仍是兼容保留字段，当前新推理管线不会建立冻结缓存。
 
 服务端响应：
 
@@ -252,6 +266,8 @@ def stream_inference(self, request: InferenceRequest):
         yield sample_rate, audio
 ```
 
+这组固定设置对应官方模式 2。WebSocket 外层的 `TextSegmenter` 负责处理 LLM delta 和句子级排队，底层模式 2 则负责在单个文本片段内部继续按语义 Token 产出音频块。
+
 WebSocket consumer 负责把 `float32/int16 ndarray` 转成 `pcm_s16le bytes` 后发送。
 
 ## 7. 角色与情感解析
@@ -330,18 +346,19 @@ Node/Python 客户端可以直接送播放器或写入 PCM/WAV。
 ws://10.8.0.4:40302/ws/tts/stream
 ```
 
-测试参数：
+测试参数应通过资源接口动态获取：
 
 ```json
 {
   "request_id": "tts-test-001",
-  "role_id": 1922493701,
-  "emotion": "平常",
-  "world_id": 1957021237,
+  "role_id": 427041150,
+  "emotion": "淡然",
   "version": "v2ProPlus",
   "text_language": "zh"
 }
 ```
+
+上面的 ID 仅代表一次部署快照。调用方必须先请求 `GET /api/role/list/` 和 `GET /api/role/emotions/?role_id=...`，不要长期硬编码角色 ID。
 
 测试文本：
 
@@ -350,7 +367,7 @@ ws://10.8.0.4:40302/ws/tts/stream
 接下来就交给我吧。
 ```
 
-返回结果：
+一次端到端返回结构示例：
 
 ```text
 connection
@@ -372,6 +389,17 @@ end
 [WS-TTS] seq=1 text='博士，今天也辛苦了。' bytes=175360 sr=32000
 [WS-TTS] seq=2 text='接下来就交给我吧。' bytes=198400 sr=32000
 ```
+
+底层模式 0/1 对照测试（普拉娜、淡然、143 字长文本、固定 `seed=1234`、预热后）结果：
+
+| 指标 | 模式 0 | 模式 1 |
+|------|-------:|-------:|
+| 返回块数 | 1 | 11 |
+| 首包时间 | 3.552 秒 | 0.512 秒 |
+| 总耗时 | 3.677 秒 | 3.733 秒 |
+| 音频时长 | 39.50 秒 | 39.54 秒 |
+
+该结果用于证明底层模式 1 可用，不表示当前 WebSocket 已经切换到模式 1。当前 WebSocket 仍固定使用模式 2。
 
 暂不做：
 

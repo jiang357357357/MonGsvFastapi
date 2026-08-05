@@ -141,7 +141,6 @@ def main(args):
             else "auto"
         ),
         precision=config["train"]["precision"],
-        gradient_clip_val=float(config["train"].get("gradient_clip", 1.0)),
         logger=logger,
         num_sanity_val_steps=0,
         callbacks=[ckpt_callback],
