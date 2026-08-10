@@ -792,11 +792,12 @@ async function transcribeAudio(audioBlob, currentUserId) {
 
 ### 实时 ASR WebSocket
 
-推荐对话场景使用 `/ws/asr/final`。它在 VAD 判断一句结束后返回最终文本，不发送实时中间字幕。
+普通持续转录使用 `/ws/asr/final`；需要当前用户声纹门禁时使用 `/ws/asr/final/voiceprint`。两者都在 VAD 判断一句结束后返回最终文本，不发送实时中间字幕。
 
 ```javascript
-async function startRealtimeAsr(pcmStream, currentUserId) {
-  const ws = new WebSocket('ws://localhost:40302/ws/asr/final');
+async function startRealtimeAsr(pcmStream, useVoiceprint = false) {
+  const path = useVoiceprint ? '/ws/asr/final/voiceprint' : '/ws/asr/final';
+  const ws = new WebSocket(`ws://localhost:40302${path}`);
   ws.binaryType = 'arraybuffer';
 
   ws.onmessage = (event) => {
@@ -837,8 +838,6 @@ async function startRealtimeAsr(pcmStream, currentUserId) {
 
   ws.send(JSON.stringify({
     command: 'start',
-    // 必须由完成认证的 music 后端注入，不能直接信任浏览器提交值。
-    speaker_id: currentUserId,
     vad: {
       chunk_ms: 200,
       end_silence_ms: 1200,
@@ -859,15 +858,17 @@ async function startRealtimeAsr(pcmStream, currentUserId) {
 
 实时接口只接收裸 PCM 二进制，不接收 mp3/wav/m4a 文件块。final 结果会由后端自动补标点。
 
-`/ws/asr/final` 强制执行声纹门禁。未注册或不匹配时不会调用 ASR，也不会返回文本；music 后端只应处理 `speaker_verified=true` 的 `result`。
+`/ws/asr/final` 不执行声纹门禁，用于兼容普通持续转录；`/ws/asr/final/voiceprint` 每个 VAD 语音段都强制执行当前个人声纹验证。未注册或不匹配时不会调用 ASR，也不会返回文本；使用声纹接口时 music 后端只应处理 `speaker_verified=true` 的 `result`。
 
 旧地址 `ws://localhost:40302/ws/asr/transcribe` 仍可连接，但严格门禁下也只返回通过声纹验证的 final，不再返回 interim。
 
-如果 WebSocket 握手返回 `403 Forbidden`，但 `GET /health` 和 `/docs` 正常，优先确认服务端已经部署最新后端代码并重启 PM2。当前版本的 `/ws/asr/final` 和 `/ws/asr/transcribe` 不做 token 鉴权、不限制 Origin；正确启动后握手日志应显示 `[accepted]`，连接成功后第一条消息为：
+如果 WebSocket 握手返回 `403 Forbidden`，但 `GET /health` 和 `/docs` 正常，优先确认服务端已经部署最新后端代码并重启 PM2。当前版本的实时路由不做 token 鉴权、不限制 Origin；连接成功后普通接口第一条消息为：
 
 ```json
-{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-speaker-gate-v1","speaker_gate":"required"}
+{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-v1","speaker_gate":"disabled"}
 ```
+
+声纹接口对应返回 `protocol=vad-final-speaker-gate-v1`、`speaker_gate=required`。
 
 ### 角色管理
 

@@ -567,7 +567,8 @@ ASR 分为训练标注和实时识别两条链路：
 | 粤语训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | FunASR `UniASR 2-pass Cantonese` |
 | 英语、日语、韩语等训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | Faster-Whisper `large-v3` |
 | 单文件转录 | `/inference/transcribe` | 声纹验证通过后使用默认 `funasr` |
-| 实时语音输入（推荐） | `/ws/asr/final` | VAD 断句、声纹验证通过后调用 final ASR |
+| 普通实时语音输入 | `/ws/asr/final` | VAD 断句后调用 final ASR，不要求声纹 |
+| 声纹实时语音输入（推荐个人模式） | `/ws/asr/final/voiceprint` | VAD 断句、声纹验证通过后调用 final ASR |
 | 旧实时入口 | `/ws/asr/transcribe` | 严格声纹门禁下不再返回 interim，仅返回验证后的 final |
 
 训练标注不要使用 streaming 模型。训练工作流按 `language` 自动分流：`zh`、`yue` 使用 FunASR，其他支持语言使用 Faster-Whisper，并输出 `.list` 文件。
@@ -654,12 +655,12 @@ POST /asr/speaker/register/
 
 服务端默认相似度阈值为 `SPEAKER_SIMILARITY_THRESHOLD=0.75`，最短验证语音为 `SPEAKER_MIN_AUDIO_MS=1000`。阈值应使用实际设备录音做误接收/误拒绝测试后再调整。
 
-### WebSocket /ws/asr/final（推荐）
+### WebSocket /ws/asr/final（普通实时识别）
 
 推荐给 music 后端、语音对话、LLM 语音输入使用。它不返回实时中间字幕，而是：
 
 ```text
-PCM -> FSMN VAD 断句 -> 当前用户声纹验证 -> final ASR -> 返回最终文本
+PCM -> FSMN VAD 断句 -> final ASR -> 返回最终文本
 ```
 
 连接地址：
@@ -675,8 +676,8 @@ ws://host:40302/ws/asr/final
   "type": "connection",
   "status": "connected",
   "message": "VAD final STT 已就绪",
-  "protocol": "vad-final-speaker-gate-v1",
-  "speaker_gate": "required",
+  "protocol": "vad-final-v1",
+  "speaker_gate": "disabled",
   "audio_format": {
     "sample_rate": 16000,
     "channels": 1,
@@ -691,7 +692,7 @@ ws://host:40302/ws/asr/final
 
 ```text
 1. 建立 WebSocket
-2. 发送包含当前用户 `speaker_id` 的 `start`，可选携带 VAD 断句参数
+2. 发送 `start`，可选携带 VAD 断句参数
 3. 持续发送 PCM int16 二进制帧
 4. 持续接收 audio_state 和 voice_activity
 5. VAD 判断一句结束后接收 result 和 commit_hint
@@ -704,7 +705,6 @@ ws://host:40302/ws/asr/final
 ```json
 {
   "command": "start",
-  "speaker_id": "music-user-123",
   "vad": {
     "chunk_ms": 200,
     "end_silence_ms": 1200,
@@ -720,7 +720,6 @@ ws://host:40302/ws/asr/final
 ```json
 {
   "command": "start",
-  "speaker_id": "music-user-123",
   "end_silence_ms": 1200
 }
 ```
@@ -761,10 +760,10 @@ ws://host:40302/ws/asr/final
   "segment_index": 1,
   "source": "silence-end",
   "duration": 2.4,
-  "speaker_id": "music-user-123",
-  "speaker_name": "当前用户",
-  "speaker_similarity": 0.91,
-  "speaker_verified": true
+  "speaker_id": null,
+  "speaker_name": null,
+  "speaker_similarity": null,
+  "speaker_verified": false
 }
 ```
 
@@ -785,7 +784,13 @@ ws://host:40302/ws/asr/final
 
 `commit_hint` 只表示语音服务建议提交，最终是否发送聊天消息仍由 MonCore/前端决定。
 
-声纹门禁强制开启。每个 VAD 语音段都先与 `speaker_id` 对应的已登记声纹做 1:1 验证；未注册、不匹配、音频过短或声纹服务异常时不会调用 ASR，也不会返回文本。`speaker_id` 必须由完成身份认证的 music 后端注入，不能直接信任浏览器任意填写的用户 ID。
+该入口不启用声纹门禁，兼容只需要持续转录的现有客户端。需要“只识别当前注册用户”时必须改用 `/ws/asr/final/voiceprint`。
+
+### WebSocket /ws/asr/final/voiceprint（声纹实时识别）
+
+请求音频、VAD 参数和事件结构与 `/ws/asr/final` 相同，但连接响应为 `protocol=vad-final-speaker-gate-v1`、`speaker_gate=required`。客户端持续发送 PCM；服务端在每个完整 VAD 语音段结束后先做当前个人声纹 1:1 验证，通过后才调用 ASR 并返回 `speaker_verified=true` 的 `result`。
+
+启动命令仍为 `{"command":"start"}`。个人部署下服务端固定绑定 `PERSONAL_SPEAKER_ID`，忽略客户端伪造的其他身份。未注册、不匹配、音频过短或声纹服务异常时不会调用 ASR，也不会返回识别文本，而是返回 `warning`、`speaker_gate` 和 `should_commit=false` 的 `commit_hint`。
 
 `reason` 可选：
 
@@ -829,7 +834,7 @@ ws://host:40302/ws/asr/final
 
 ### WebSocket /ws/asr/transcribe
 
-旧的流式入口。严格声纹门禁启用后，为避免在验证前泄露文本，该接口不再返回实时中间字幕，只在完整 VAD 段通过声纹验证后返回 final。新对接统一使用 `/ws/asr/final`。
+旧的流式入口。严格声纹门禁启用后，为避免在验证前泄露文本，该接口不再返回实时中间字幕，只在完整 VAD 段通过声纹验证后返回 final。新对接的普通转录使用 `/ws/asr/final`，声纹转录使用 `/ws/asr/final/voiceprint`。
 
 连接地址：
 

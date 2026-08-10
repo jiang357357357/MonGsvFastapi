@@ -13,7 +13,8 @@ MonGSV 现在有两条 ASR 链路，使用场景不同：
 | 中文训练数据准备 | 离线 FunASR | `paraformer-large + fsmn-vad + ct-punc` | 是 | 中文切片的批量标注、训练前预处理 |
 | 粤语训练数据准备 | 离线 FunASR | `UniASR 2-pass Cantonese` | 依模型输出 | 粤语切片的批量标注 |
 | 其他支持语言训练 | Faster-Whisper | `large-v3 + float16` | 依模型输出 | 英语、日语、韩语等训练标注 |
-| 实时语音识别（推荐） | `/ws/asr/final` | VAD 断句 + final ASR | 是 | 实时对话、LLM 语音输入 |
+| 普通实时语音识别 | `/ws/asr/final` | VAD 断句 + final ASR | 是 | 通用实时转录 |
+| 声纹实时语音识别（个人模式推荐） | `/ws/asr/final/voiceprint` | VAD + 声纹门禁 + final ASR | 是 | 只接受当前用户的实时对话 |
 | 旧实时入口 | `/ws/asr/transcribe` | VAD + 声纹门禁 + final ASR | 自动补标点 | 兼容旧路径，不再返回 interim |
 | 多语言单文件转录 | Faster-Whisper | `faster-whisper-*` | 依模型输出 | 非中文/自动语言检测 |
 
@@ -82,19 +83,20 @@ HTTP 模型暴露了 `model_size`、`precision`、`batch_size`、`beam_size`、`
 
 ## 3. 实时 ASR
 
-推荐实时接口：
+实时接口分为普通模式和声纹模式：
 
 ```text
-ws://host:40302/ws/asr/final
+普通：ws://host:40302/ws/asr/final
+声纹：ws://host:40302/ws/asr/final/voiceprint
 ```
 
 连接成功后，后端会立即返回：
 
 ```json
-{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-speaker-gate-v1","speaker_gate":"required"}
+{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-v1","speaker_gate":"disabled"}
 ```
 
-`/ws/asr/final` 使用 VAD 判断一句话结束，先与当前用户的已登记声纹做 1:1 验证，通过后才把该段 PCM 送入 final ASR。它会保留约 1.2 秒前置音频，避免 VAD 从 `speech=false` 切到 `speech=true` 之前的开头人声被丢弃。
+`/ws/asr/final` 使用 VAD 判断一句话结束后直接执行 final ASR；`/ws/asr/final/voiceprint` 则先与当前用户的已登记声纹做 1:1 验证，通过后才执行 ASR。两者都会保留约 1.2 秒前置音频，避免 VAD 从 `speech=false` 切到 `speech=true` 之前的开头人声被丢弃。
 
 音频输入要求：
 
@@ -110,7 +112,7 @@ ws://host:40302/ws/asr/final
 
 ```text
 1. 建立 WebSocket
-2. 发送包含当前用户 `speaker_id` 的 `start`，可选携带 VAD 断句参数
+2. 发送 `start`，可选携带 VAD 断句参数
 3. 持续发送 PCM int16 二进制帧
 4. 持续接收 audio_state / voice_activity
 5. VAD 断句后接收 result / commit_hint
@@ -123,7 +125,6 @@ ws://host:40302/ws/asr/final
 ```json
 {
   "command": "start",
-  "speaker_id": "music-user-123",
   "vad": {
     "chunk_ms": 200,
     "end_silence_ms": 1200,
@@ -139,12 +140,11 @@ ws://host:40302/ws/asr/final
 ```json
 {
   "command": "start",
-  "speaker_id": "music-user-123",
   "end_silence_ms": 1200
 }
 ```
 
-严格声纹门禁下，两个 WebSocket 接口都不会返回 interim。只有完整 VAD 段通过声纹验证后，才返回 `is_interim=false` 的最终段落。
+两个 `/ws/asr/final*` 接口都不返回 interim。普通接口在完整 VAD 段结束后返回 final；声纹接口只有验证通过后才返回 final。
 
 音频状态：
 
@@ -209,7 +209,7 @@ ws://host:40302/ws/asr/final
 
 `commit_hint` 不直接代表发送聊天消息，只表示 GSV 建议 MonCore/前端可以提交。
 
-声纹门禁强制开启：未注册、不匹配、有效语音过短或声纹服务异常时均按拒绝处理，ASR 不会执行。`speaker_id` 必须由完成身份认证的 music 后端注入，不能信任浏览器自行声明的 ID。
+声纹门禁只在 `/ws/asr/final/voiceprint` 强制开启：未注册、不匹配、有效语音过短或声纹服务异常时均按拒绝处理，ASR 不会执行。个人部署由服务端固定绑定 `PERSONAL_SPEAKER_ID`，不信任客户端自行声明的 ID。
 
 停止后返回：
 
@@ -223,7 +223,7 @@ ws://host:40302/ws/asr/final
 
 ### 403 握手排查
 
-当前 `/ws/asr/final` 和 `/ws/asr/transcribe` 不做 token 鉴权，也不限制 Origin。若 `GET /health`、`/docs` 正常，但 WebSocket 握手返回 `HTTP 403 Forbidden`，同时普通 HTTP GET WebSocket 路径返回 `404 Not Found`，通常不是 MonCore 代理链路问题，而是 GSV 后端没有跑到正确的 WebSocket 路由。
+当前 `/ws/asr/final`、`/ws/asr/final/voiceprint` 和 `/ws/asr/transcribe` 不做 token 鉴权，也不限制 Origin。若 `GET /health`、`/docs` 正常，但 WebSocket 握手返回 `HTTP 403 Forbidden`，同时普通 HTTP GET WebSocket 路径返回 `404 Not Found`，通常不是 MonCore 代理链路问题，而是 GSV 后端没有跑到正确的 WebSocket 路由。
 
 优先检查：
 
@@ -273,7 +273,7 @@ funasr_large：我还记得这间会议室，这是专门为特雷西亚控制�
 |------|----------------|-------------|
 | 后端框架 | FastAPI + Uvicorn | Django + Daphne |
 | 训练 ASR | `paraformer-large + VAD + PUNC` | 无训练链路 |
-| 实时 ASR | `/ws/asr/final`，或 `/ws/asr/transcribe` | `ws/voice/transcribe/` |
+| 实时 ASR | `/ws/asr/final`、`/ws/asr/final/voiceprint`，或 `/ws/asr/transcribe` | `ws/voice/transcribe/` |
 | 实时模型 | `paraformer-zh-streaming` | `paraformer-zh-streaming` |
 | 标点恢复 | final 阶段 `ct-punc` | 独立标点模型 |
 | 声纹识别 | 支持注册/识别/验证接口 | 支持 |
@@ -289,7 +289,8 @@ music 后端/前端建议这样用：
 |------|----------|
 | 上传音频并训练角色 | `/workflow/training/full` 或 `/workflow/complete` |
 | 单文件转录 | `/inference/transcribe` |
-| 实时麦克风识别/对话输入 | `/ws/asr/final` |
+| 普通实时麦克风识别 | `/ws/asr/final` |
+| 只接受当前用户的实时识别 | `/ws/asr/final/voiceprint` |
 | 旧实时入口 | `/ws/asr/transcribe`（声纹验证后仅返回 final） |
 | 训练数据批量 ASR | `/data-prep/asr/recognize` |
 
