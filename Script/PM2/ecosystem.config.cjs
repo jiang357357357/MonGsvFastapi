@@ -58,12 +58,6 @@ fs.mkdirSync(LOG_DIR, { recursive: true });
 
 const config = readMonConfig();
 const viteEntry = path.join(FRONTEND_DIR, 'node_modules', 'vite', 'bin', 'vite.js');
-const frontendDist = path.join(FRONTEND_DIR, 'dist');
-
-if (!fs.existsSync(frontendDist)) {
-  console.warn(`[pm2] Frontend dist not found: ${frontendDist}`);
-  console.warn('[pm2] Run `npm run build` in Code/GptSov_Front before starting production preview.');
-}
 
 module.exports = {
   apps: [
@@ -112,20 +106,21 @@ module.exports = {
       name: 'MonGsvFrontend',
       script: viteEntry,
       args: [
-        'preview',
         '--host',
         config.frontendHost,
         '--port',
         String(config.frontendPort),
+        '--strictPort',
       ],
       cwd: FRONTEND_DIR,
       interpreter: 'node',
       instances: 1,
       autorestart: true,
+      // Vite watches source files and performs HMR; PM2 should only supervise the process.
       watch: false,
       max_memory_restart: '1G',
       env: {
-        NODE_ENV: 'production',
+        NODE_ENV: 'development',
         FRONTEND_PORT: String(config.frontendPort),
         MON_GSV_PORT: String(config.backendPort),
       },
