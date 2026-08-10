@@ -50,10 +50,12 @@ Data/Output/
 Data/DB/
 Data/Media/
 Data/Static/
+Data/speaker_db/
 TEMP/
 test/
 *.log
 *.tmp
+*.7z
 
 # ------------------------------------------------------------
 # Downloaded models / external weights
