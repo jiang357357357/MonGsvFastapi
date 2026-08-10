@@ -10,9 +10,11 @@ MonGSV 现在有两条 ASR 链路，使用场景不同：
 
 | 场景 | 使用链路 | 模型 | 是否带标点 | 推荐用途 |
 |------|----------|------|------------|----------|
-| 训练数据准备 | 离线 ASR | `paraformer-large + fsmn-vad + ct-punc` | 是 | 切片后的批量标注、训练前预处理 |
+| 中文训练数据准备 | 离线 FunASR | `paraformer-large + fsmn-vad + ct-punc` | 是 | 中文切片的批量标注、训练前预处理 |
+| 粤语训练数据准备 | 离线 FunASR | `UniASR 2-pass Cantonese` | 依模型输出 | 粤语切片的批量标注 |
+| 其他支持语言训练 | Faster-Whisper | `large-v3 + float16` | 依模型输出 | 英语、日语、韩语等训练标注 |
 | 实时语音识别（推荐） | `/ws/asr/final` | VAD 断句 + final ASR | 是 | 实时对话、LLM 语音输入 |
-| 实时中间字幕 | `/ws/asr/transcribe` | `paraformer-zh-streaming` | final 阶段补标点 | 边说边显示字幕 |
+| 旧实时入口 | `/ws/asr/transcribe` | VAD + 声纹门禁 + final ASR | 自动补标点 | 兼容旧路径，不再返回 interim |
 | 多语言单文件转录 | Faster-Whisper | `faster-whisper-*` | 依模型输出 | 非中文/自动语言检测 |
 
 **训练 ASR 不使用 `paraformer-zh-streaming`。** streaming 模型是实时场景用的，直接用于训练标注容易出现重复字、漏字、无标点等问题。
@@ -32,7 +34,7 @@ MonGSV 现在有两条 ASR 链路，使用场景不同：
  -> GPT / SoVITS 训练
 ```
 
-默认配置：
+中文默认配置：
 
 ```text
 model_type = funasr
@@ -47,11 +49,21 @@ speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
 + punc_ct-transformer_zh-cn-common-vocab272727-pytorch
 ```
 
+训练工作流按语言自动选择引擎：
+
+| `language` | 实际引擎 |
+|------------|----------|
+| `zh` | FunASR Paraformer-large + FSMN VAD +中文标点模型 |
+| `yue` | FunASR UniASR 2-pass Cantonese |
+| `en`、`ja`、`ko` 等 | Faster-Whisper large-v3 + float16 |
+
 输出 `.list` 格式：
 
 ```text
 audio_path|speaker|language|text
 ```
+
+`speaker` 当前取输入文件或目录名，`language` 写成大写代码。独立调用 `/data-prep/asr/recognize` 时，`output_file` 只是输出位置提示：如果传入 `.list` 路径，当前实现只使用其父目录，实际文件名必须读取响应中的 `output_file`。
 
 特点：
 
@@ -59,6 +71,12 @@ audio_path|speaker|language|text
 - 识别结果自带中文标点。
 - 会通过 VAD/标点模型提升完整句质量。
 - 失败时工作流会停止，并输出缺失项/失败原因，避免只切分完就直接进入训练。
+
+### 当前参数边界
+
+HTTP 模型暴露了 `model_size`、`precision`、`batch_size`、`beam_size`、`vad_filter`，但统一服务目前只把 `model_type` 和 `language` 继续传到底层。Faster-Whisper 实际使用 `large-v3 + float16 + beam_size=5 + VAD`；其他参数目前主要用于配置校验或驻留键，不能当作已经生效的推理调参。
+
+`/inference/transcribe/models/load` 当前只准备统一引擎并登记驻留状态，大模型权重仍在第一次识别时延迟加载，不是完整的显存预热。
 
 ---
 
@@ -73,10 +91,10 @@ ws://host:40302/ws/asr/final
 连接成功后，后端会立即返回：
 
 ```json
-{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-v1"}
+{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-speaker-gate-v1","speaker_gate":"required"}
 ```
 
-`/ws/asr/final` 使用 VAD 判断一句话结束，然后把该段 PCM 送入 final ASR。它会保留约 1.2 秒前置音频，避免 VAD 从 `speech=false` 切到 `speech=true` 之前的开头人声被丢弃。
+`/ws/asr/final` 使用 VAD 判断一句话结束，先与当前用户的已登记声纹做 1:1 验证，通过后才把该段 PCM 送入 final ASR。它会保留约 1.2 秒前置音频，避免 VAD 从 `speech=false` 切到 `speech=true` 之前的开头人声被丢弃。
 
 音频输入要求：
 
@@ -92,7 +110,7 @@ ws://host:40302/ws/asr/final
 
 ```text
 1. 建立 WebSocket
-2. 发送 `{"command":"start"}`，可选携带 VAD 断句参数
+2. 发送包含当前用户 `speaker_id` 的 `start`，可选携带 VAD 断句参数
 3. 持续发送 PCM int16 二进制帧
 4. 持续接收 audio_state / voice_activity
 5. VAD 断句后接收 result / commit_hint
@@ -105,6 +123,7 @@ ws://host:40302/ws/asr/final
 ```json
 {
   "command": "start",
+  "speaker_id": "music-user-123",
   "vad": {
     "chunk_ms": 200,
     "end_silence_ms": 1200,
@@ -120,11 +139,12 @@ ws://host:40302/ws/asr/final
 ```json
 {
   "command": "start",
+  "speaker_id": "music-user-123",
   "end_silence_ms": 1200
 }
 ```
 
-对 `/ws/asr/final`，第 4 步不会返回 interim，而是在 VAD 断句后返回 `is_interim=false` 的最终段落。只有需要“边说边显示”的字幕体验时，才使用 `/ws/asr/transcribe`。
+严格声纹门禁下，两个 WebSocket 接口都不会返回 interim。只有完整 VAD 段通过声纹验证后，才返回 `is_interim=false` 的最终段落。
 
 音频状态：
 
@@ -148,15 +168,15 @@ ws://host:40302/ws/asr/final
 }
 ```
 
-`/ws/asr/transcribe` 返回实时片段：
+声纹不匹配时返回门禁事件，不返回文本：
 
 ```json
 {
-  "type": "result",
-  "text": "实时识别文本",
-  "accumulated": "实时识别文本",
-  "is_interim": true,
-  "sentence_end": false
+  "type": "speaker_gate",
+  "accepted": false,
+  "code": "VOICEPRINT_MISMATCH",
+  "speaker_id": "music-user-123",
+  "speaker_similarity": 0.41
 }
 ```
 
@@ -188,6 +208,8 @@ ws://host:40302/ws/asr/final
 ```
 
 `commit_hint` 不直接代表发送聊天消息，只表示 GSV 建议 MonCore/前端可以提交。
+
+声纹门禁强制开启：未注册、不匹配、有效语音过短或声纹服务异常时均按拒绝处理，ASR 不会执行。`speaker_id` 必须由完成身份认证的 music 后端注入，不能信任浏览器自行声明的 ID。
 
 停止后返回：
 
@@ -224,7 +246,7 @@ connection open
 
 `paraformer-zh-streaming` 是在线流式模型，推荐按固定 chunk 连续输入，并维护 cache。它更适合“边说边显示”的场景。
 
-训练标注需要的是稳定、完整、带标点的句子，因此使用离线 `funasr_large` 更合适。
+中文训练标注需要的是稳定、完整、带标点的句子，因此使用离线 FunASR Paraformer-large 更合适。非中文训练则由工作流分流到 Faster-Whisper。
 
 实测同一批切片：
 
@@ -237,7 +259,9 @@ funasr_large：我还记得这间会议室，这是专门为特雷西亚控制�
 所以推荐：
 
 ```text
-训练标注：funasr_large
+中文训练标注：FunASR Paraformer-large
+粤语训练标注：FunASR UniASR 2-pass Cantonese
+其他支持语言训练标注：Faster-Whisper large-v3
 实时交互：paraformer-zh-streaming + final 标点恢复
 ```
 
@@ -263,10 +287,10 @@ music 后端/前端建议这样用：
 
 | 需求 | 调用接口 |
 |------|----------|
-| 上传音频并训练角色 | `/workflow/training-guide` 或 `/workflow/complete` |
+| 上传音频并训练角色 | `/workflow/training/full` 或 `/workflow/complete` |
 | 单文件转录 | `/inference/transcribe` |
 | 实时麦克风识别/对话输入 | `/ws/asr/final` |
-| 实时中间字幕 | `/ws/asr/transcribe` |
+| 旧实时入口 | `/ws/asr/transcribe`（声纹验证后仅返回 final） |
 | 训练数据批量 ASR | `/data-prep/asr/recognize` |
 
 前端不要自己决定训练 ASR 模型，只需要传：
@@ -279,4 +303,4 @@ language
 raw audio
 ```
 
-后端会按训练流程自动使用 `funasr_large` 完成标注。
+后端会按 `language` 自动选择 FunASR 或 Faster-Whisper 完成训练标注。

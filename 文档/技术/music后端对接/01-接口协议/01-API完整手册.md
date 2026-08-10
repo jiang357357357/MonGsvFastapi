@@ -123,26 +123,31 @@ ASR 语音识别。
 |------|------|------|--------|------|
 | `audio_dir` | string | 二选一 | `""` | 音频目录路径 |
 | `audio_file` | file | 二选一 | - | 直接上传音频文件 |
-| `output_file` | string | 是 | - | 输出标注文件路径(.list) |
+| `output_file` | string | 是 | - | 输出位置提示；传入 `.list` 路径时当前实现只使用其父目录，实际文件名以响应中的 `output_file` 为准 |
 | `language` | string | 否 | `"zh"` | 语言 |
 
 **响应示例：**
 ```json
 {
   "success": true,
-  "message": "ASR识别完成",
-  "output_file": "/output/asr/audio.list",
-  "processed_files": ["audio1.wav"],
+  "message": "识别完成",
+  "output_file": "/output/asr/sliced.list",
+  "processed_files": ["/data/audio/sliced/audio1.wav"],
   "recognition_results": [
     {
-      "file": "audio1.wav",
-      "text": "今天的天气真好",
-      "language": "zh"
+      "audio_path": "/data/audio/sliced/audio1.wav",
+      "speaker": "sliced",
+      "language": "ZH",
+      "text": "今天的天气真好。"
     }
   ],
+  "error_files": [],
+  "total_duration": 0.0,
   "processing_time": 3.2
 }
 ```
+
+识别结果中的 `speaker` 目前取输入文件或目录名；`language` 使用大写语言代码。`total_duration` 字段当前保留但尚未统计，通常为 `0.0`。
 
 ---
 
@@ -558,12 +563,14 @@ ASR 分为训练标注和实时识别两条链路：
 
 | 场景 | 推荐接口 | 使用模型 |
 |------|----------|----------|
-| 训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | `funasr_large`，即 `paraformer-large + VAD + ct-punc` |
-| 单文件转录 | `/inference/transcribe` | 默认 `funasr` |
-| 实时语音输入（推荐） | `/ws/asr/final` | VAD 断句后调用 final ASR，适合对话 |
-| 实时中间字幕 | `/ws/asr/transcribe` | `paraformer-zh-streaming`，final 阶段补标点 |
+| 中文训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | FunASR `paraformer-large + FSMN VAD + ct-punc` |
+| 粤语训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | FunASR `UniASR 2-pass Cantonese` |
+| 英语、日语、韩语等训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | Faster-Whisper `large-v3` |
+| 单文件转录 | `/inference/transcribe` | 声纹验证通过后使用默认 `funasr` |
+| 实时语音输入（推荐） | `/ws/asr/final` | VAD 断句、声纹验证通过后调用 final ASR |
+| 旧实时入口 | `/ws/asr/transcribe` | 严格声纹门禁下不再返回 interim，仅返回验证后的 final |
 
-训练标注不要使用 streaming 模型。训练流程默认会走离线 FunASR large，并输出带标点的 `.list` 文件。
+训练标注不要使用 streaming 模型。训练工作流按 `language` 自动分流：`zh`、`yue` 使用 FunASR，其他支持语言使用 Faster-Whisper，并输出 `.list` 文件。
 
 ### POST /inference/transcribe
 
@@ -574,37 +581,46 @@ ASR 分为训练标注和实时识别两条链路：
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `audio_file` | file | 二选一 | - | 上传音频 |
-| `audio_path` | string | 二选一 | `""` | 音频路径 |
+| `audio_path` | string | 二选一 | `""` | 服务端音频路径；当前只允许 `Resources/Model` 目录内的文件 |
+| `speaker_id` | string | 是 | - | 当前登录用户 ID，必须已经通过声纹注册接口登记 |
 | `language` | string | 否 | `"zh"` | 语言 |
 | `model_type` | string | 否 | `"funasr"` | ASR 模型类型 |
-| `model_size` | string | 否 | `"large"` | 模型大小 |
-| `precision` | string | 否 | `"float32"` | 精度 |
+| `model_size` | string | 否 | `"large"` | 模型大小；当前会参与配置校验和驻留键，但尚未传入底层批量识别 |
+| `precision` | string | 否 | `"float32"` | 精度；当前会参与配置校验和驻留键，但尚未传入底层批量识别 |
+
+当前真正生效的是 `model_type` 与 `language`。Faster-Whisper 批量识别底层实际仍使用 `large-v3 + float16 + beam_size=5 + VAD`；接口模型中的 `batch_size`、`beam_size`、`vad_filter` 也尚未继续传到底层执行。
 
 **响应示例：**
 ```json
 {
   "success": true,
-  "message": "ASR识别完成",
+  "message": "识别完成",
   "text": "今天的天气真好，适合出门散步。",
-  "language": "zh",
+  "language": "ZH",
   "segments": [
-    { "text": "今天的天气真好", "start": 0.0, "end": 2.1, "language": "zh" },
-    { "text": "适合出门散步", "start": 2.1, "end": 3.8, "language": "zh" }
+    {
+      "audio_path": "/tmp/transcribe_upload_xxx/speech.wav",
+      "speaker": "speech.wav",
+      "language": "ZH",
+      "text": "今天的天气真好，适合出门散步。"
+    }
   ],
   "processing_time": 1.5
 }
 ```
 
+`segments` 当前是逐文件识别记录，不包含 `start`、`end` 时间戳。上传文件使用临时路径，响应返回后该临时文件会被删除，不应把 `audio_path` 当作可长期访问的资源地址。
+
 ### POST /inference/transcribe/models/load
 
-预加载 ASR 模型。
+准备 ASR 引擎并登记驻留状态。当前实现采用延迟加载：Paraformer 或 Whisper 的大模型权重仍在第一次实际识别时加载，因此该接口成功不代表大模型已经完成显存预热。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `model_type` | string | 否 | `"funasr"` | 模型类型 |
-| `model_size` | string | 否 | `"large"` | 模型大小 |
+| `model_size` | string | 否 | `"large"` | 模型大小；当前仅参与校验和驻留键 |
 | `language` | string | 否 | `"zh"` | 语言 |
-| `precision` | string | 否 | `"float32"` | 精度 |
+| `precision` | string | 否 | `"float32"` | 精度；当前仅参与校验和驻留键 |
 
 ### GET /inference/transcribe/models/info
 
@@ -618,12 +634,32 @@ ASR 分为训练标注和实时识别两条链路：
 
 ASR 驻留清理。
 
+### 当前用户声纹注册
+
+用户第一次启用语音输入时，music 后端先调用：
+
+```text
+POST /asr/speaker/register/
+```
+
+请求使用 `multipart/form-data`：
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `audio_file` | 是 | 当前用户的干净单人语音，建议 5～10 秒 |
+| `speaker_id` | 是 | music 后端认证后的用户 ID |
+| `name` | 是 | 展示名称 |
+
+同一个 `speaker_id` 再次注册会更新原声纹。注销使用 `POST /asr/speaker/unregister/`，字段为 `speaker_id`；查询使用 `GET /asr/speaker/list/`。实时和单文件 ASR 必须传入同一个 `speaker_id`。
+
+服务端默认相似度阈值为 `SPEAKER_SIMILARITY_THRESHOLD=0.75`，最短验证语音为 `SPEAKER_MIN_AUDIO_MS=1000`。阈值应使用实际设备录音做误接收/误拒绝测试后再调整。
+
 ### WebSocket /ws/asr/final（推荐）
 
 推荐给 music 后端、语音对话、LLM 语音输入使用。它不返回实时中间字幕，而是：
 
 ```text
-PCM -> FSMN VAD 断句 -> 带入 1.2s 前置音频 -> final ASR -> 返回最终文本
+PCM -> FSMN VAD 断句 -> 当前用户声纹验证 -> final ASR -> 返回最终文本
 ```
 
 连接地址：
@@ -639,7 +675,8 @@ ws://host:40302/ws/asr/final
   "type": "connection",
   "status": "connected",
   "message": "VAD final STT 已就绪",
-  "protocol": "vad-final-v1",
+  "protocol": "vad-final-speaker-gate-v1",
+  "speaker_gate": "required",
   "audio_format": {
     "sample_rate": 16000,
     "channels": 1,
@@ -654,7 +691,7 @@ ws://host:40302/ws/asr/final
 
 ```text
 1. 建立 WebSocket
-2. 发送 `{"command":"start"}`，可选携带 VAD 断句参数
+2. 发送包含当前用户 `speaker_id` 的 `start`，可选携带 VAD 断句参数
 3. 持续发送 PCM int16 二进制帧
 4. 持续接收 audio_state 和 voice_activity
 5. VAD 判断一句结束后接收 result 和 commit_hint
@@ -667,6 +704,7 @@ ws://host:40302/ws/asr/final
 ```json
 {
   "command": "start",
+  "speaker_id": "music-user-123",
   "vad": {
     "chunk_ms": 200,
     "end_silence_ms": 1200,
@@ -682,6 +720,7 @@ ws://host:40302/ws/asr/final
 ```json
 {
   "command": "start",
+  "speaker_id": "music-user-123",
   "end_silence_ms": 1200
 }
 ```
@@ -722,10 +761,10 @@ ws://host:40302/ws/asr/final
   "segment_index": 1,
   "source": "silence-end",
   "duration": 2.4,
-  "speaker_id": null,
-  "speaker_name": null,
-  "speaker_similarity": null,
-  "speaker_is_known": null
+  "speaker_id": "music-user-123",
+  "speaker_name": "当前用户",
+  "speaker_similarity": 0.91,
+  "speaker_verified": true
 }
 ```
 
@@ -746,14 +785,14 @@ ws://host:40302/ws/asr/final
 
 `commit_hint` 只表示语音服务建议提交，最终是否发送聊天消息仍由 MonCore/前端决定。
 
+声纹门禁强制开启。每个 VAD 语音段都先与 `speaker_id` 对应的已登记声纹做 1:1 验证；未注册、不匹配、音频过短或声纹服务异常时不会调用 ASR，也不会返回文本。`speaker_id` 必须由完成身份认证的 music 后端注入，不能直接信任浏览器任意填写的用户 ID。
+
 `reason` 可选：
 
 | reason | 含义 |
 |--------|------|
 | `silence` | 检测到人声结束 |
-| `sentence_end` | 文本语义句尾 |
 | `manual_stop` | 用户停止录音 |
-| `timeout` | 太久没有新内容 |
 
 警告响应：
 
@@ -772,6 +811,11 @@ ws://host:40302/ws/asr/final
 | `NO_SPEECH` | 未检测到有效人声或有效文本 |
 | `LOW_VOLUME` | 输入音量过低 |
 | `AUDIO_FORMAT_UNSUPPORTED` | 音频格式不是 16k mono int16 PCM |
+| `VOICEPRINT_REQUIRED` | 未绑定当前用户 `speaker_id` |
+| `VOICEPRINT_NOT_REGISTERED` | 当前用户尚未登记声纹 |
+| `VOICEPRINT_AUDIO_TOO_SHORT` | 有效语音过短，无法可靠验证 |
+| `VOICEPRINT_MISMATCH` | 说话人不是当前用户，该段语音已丢弃 |
+| `VOICEPRINT_ERROR` | 声纹服务异常，按拒绝处理 |
 
 停止响应：
 
@@ -785,7 +829,7 @@ ws://host:40302/ws/asr/final
 
 ### WebSocket /ws/asr/transcribe
 
-2-pass 流式识别接口，面向需要实时中间字幕的前端麦克风场景。对话系统默认推荐使用 `/ws/asr/final`。
+旧的流式入口。严格声纹门禁启用后，为避免在验证前泄露文本，该接口不再返回实时中间字幕，只在完整 VAD 段通过声纹验证后返回 final。新对接统一使用 `/ws/asr/final`。
 
 连接地址：
 
@@ -808,9 +852,9 @@ ws://host:40302/ws/asr/transcribe
 
 ```text
 1. 建立 WebSocket
-2. 发送 {"command":"start"}
+2. 发送 {"command":"start","speaker_id":"music-user-123"}
 3. 持续发送 PCM int16 二进制帧
-4. 接收 is_interim=true 的实时片段
+4. VAD 断句并通过声纹验证后接收 final
 5. 结束时发送 {"command":"stop"}
 6. 接收 final_text
 ```
@@ -821,19 +865,22 @@ ws://host:40302/ws/asr/transcribe
 {
   "type": "connection",
   "status": "connected",
-  "message": "2-pass 流式识别已就绪"
+  "message": "声纹门禁 ASR 已就绪",
+  "protocol": "speaker-gated-final-v1",
+  "speaker_gate": "required",
+  "interim_enabled": false
 }
 ```
 
-实时片段响应：
+声纹拒绝响应（不包含识别文本）：
 
 ```json
 {
-  "type": "result",
-  "text": "实时识别文本",
-  "accumulated": "实时识别文本",
-  "is_interim": true,
-  "sentence_end": false
+  "type": "speaker_gate",
+  "accepted": false,
+  "code": "VOICEPRINT_MISMATCH",
+  "speaker_id": "music-user-123",
+  "speaker_similarity": 0.41
 }
 ```
 
@@ -846,10 +893,10 @@ ws://host:40302/ws/asr/transcribe
   "accumulated": "累计最终文本，带标点。",
   "is_interim": false,
   "sentence_end": true,
-  "speaker_id": null,
-  "speaker_name": null,
-  "speaker_similarity": null,
-  "speaker_is_known": null
+  "speaker_id": "music-user-123",
+  "speaker_name": "当前用户",
+  "speaker_similarity": 0.91,
+  "speaker_verified": true
 }
 ```
 

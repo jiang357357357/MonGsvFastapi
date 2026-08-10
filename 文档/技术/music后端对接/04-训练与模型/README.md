@@ -29,6 +29,8 @@ v1 / v2 / v3 / v4 / v2Pro / v2ProPlus
  -> 模型权重目录
 ```
 
+ASR 由后端按训练语言自动分流：中文使用 FunASR Paraformer-large + FSMN VAD +标点模型，粤语使用 FunASR UniASR 2-pass Cantonese，英语、日语、韩语等使用 Faster-Whisper large-v3。训练标注不使用实时 `paraformer-zh-streaming`。
+
 推荐入口：
 
 | 接口 | 用途 |

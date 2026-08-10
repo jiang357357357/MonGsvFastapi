@@ -293,13 +293,14 @@ print(f"切分完成，输出 {len(response.output_files)} 个文件")
 ```python
 request = builder.asr_request(
     input_path="/audio/sliced",           # 音频目录
-    output_file="/output/asr/result.list", # 输出标注文件
-    model_type="funasr",
+    output_file="/output/asr/result.list", # 输出位置提示，真实路径读取 response.output_file
     language="zh"
 )
 response = client.asr_recognize(request)
 print(f"识别结果文件：{response.output_file}")
 ```
+
+统一网关的训练/数据准备 ASR 根据 `language` 自动选引擎：`zh`、`yue` 使用 FunASR，英语、日语、韩语等使用 Faster-Whisper。SDK 请求模型中虽然保留 `model_type` 等字段，但 `/data-prep/asr/recognize` 当前不会据此覆盖语言分流。传入的 `output_file` 只提供输出目录提示，实际生成文件名以响应字段为准。
 
 ## 数据集格式化
 

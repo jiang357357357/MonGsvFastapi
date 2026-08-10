@@ -217,6 +217,7 @@ curl -s "http://localhost:40302/inference/ref-audio?path=Resources/Model/Standal
 ```bash
 curl -X POST "http://localhost:40302/inference/transcribe" \
   -F "audio_file=@/path/to/speech.wav" \
+  -F "speaker_id=music-user-123" \
   -F "language=zh" \
   -F "model_type=funasr"
 ```
@@ -225,15 +226,22 @@ curl -X POST "http://localhost:40302/inference/transcribe" \
 ```json
 {
   "success": true,
-  "message": "ASR识别完成",
+  "message": "识别完成",
   "text": "今天的天气真好，适合出门散步。",
-  "language": "zh",
+  "language": "ZH",
   "segments": [
-    { "text": "今天的天气真好", "start": 0.0, "end": 2.1, "language": "zh" }
+    {
+      "audio_path": "/tmp/transcribe_upload_xxx/speech.wav",
+      "speaker": "speech.wav",
+      "language": "ZH",
+      "text": "今天的天气真好，适合出门散步。"
+    }
   ],
   "processing_time": 1.5
 }
 ```
+
+当前 `segments` 是逐文件识别记录，不含 `start`、`end` 时间戳。上传音频对应的 `audio_path` 是服务端临时路径，响应完成后会被清理。
 
 ### 指定音频路径识别
 
@@ -244,7 +252,9 @@ curl -X POST "http://localhost:40302/data-prep/asr/recognize" \
   -F "language=zh"
 ```
 
-### 预加载 ASR 模型
+`output_file` 当前只作为输出位置提示：传入带 `.list` 后缀的路径时，后端使用其父目录，实际标注文件名以响应中的 `output_file` 为准。训练工作流会自动读取这个真实返回路径。
+
+### 准备 ASR 模型驻留
 
 ```bash
 curl -X POST "http://localhost:40302/inference/transcribe/models/load" \
@@ -252,6 +262,8 @@ curl -X POST "http://localhost:40302/inference/transcribe/models/load" \
   -F "model_size=large" \
   -F "language=zh"
 ```
+
+该接口当前创建统一 ASR 引擎并登记驻留状态；Paraformer/Whisper 的大模型权重仍在第一次识别时延迟加载。`model_size`、`precision` 当前参与配置校验和驻留键，但底层 Faster-Whisper 批量识别仍固定使用 `large-v3 + float16 + beam_size=5 + VAD`。
 
 ---
 
@@ -763,9 +775,10 @@ function startStreamingTTS({ roleId, emotion, text, enqueuePcmChunk }) {
 ### ASR 转录
 
 ```javascript
-async function transcribeAudio(audioBlob) {
+async function transcribeAudio(audioBlob, currentUserId) {
   const formData = new FormData();
   formData.append('audio_file', audioBlob, 'speech.wav');
+  formData.append('speaker_id', currentUserId);
   formData.append('language', 'zh');
   formData.append('model_type', 'funasr');
 
@@ -782,7 +795,7 @@ async function transcribeAudio(audioBlob) {
 推荐对话场景使用 `/ws/asr/final`。它在 VAD 判断一句结束后返回最终文本，不发送实时中间字幕。
 
 ```javascript
-async function startRealtimeAsr(pcmStream) {
+async function startRealtimeAsr(pcmStream, currentUserId) {
   const ws = new WebSocket('ws://localhost:40302/ws/asr/final');
   ws.binaryType = 'arraybuffer';
 
@@ -809,6 +822,10 @@ async function startRealtimeAsr(pcmStream) {
       console.warn(data.code, data.message);
     }
 
+    if (data.type === 'speaker_gate' && !data.accepted) {
+      console.warn('非当前用户语音已忽略:', data.code, data.speaker_similarity);
+    }
+
     if (data.type === 'status' && data.final_text !== undefined) {
       console.log('完整文本:', data.final_text);
     }
@@ -820,6 +837,8 @@ async function startRealtimeAsr(pcmStream) {
 
   ws.send(JSON.stringify({
     command: 'start',
+    // 必须由完成认证的 music 后端注入，不能直接信任浏览器提交值。
+    speaker_id: currentUserId,
     vad: {
       chunk_ms: 200,
       end_silence_ms: 1200,
@@ -840,12 +859,14 @@ async function startRealtimeAsr(pcmStream) {
 
 实时接口只接收裸 PCM 二进制，不接收 mp3/wav/m4a 文件块。final 结果会由后端自动补标点。
 
-如果需要边说边显示字幕，可以把地址换成 `ws://localhost:40302/ws/asr/transcribe`，它会额外返回 `is_interim=true` 的实时片段。
+`/ws/asr/final` 强制执行声纹门禁。未注册或不匹配时不会调用 ASR，也不会返回文本；music 后端只应处理 `speaker_verified=true` 的 `result`。
+
+旧地址 `ws://localhost:40302/ws/asr/transcribe` 仍可连接，但严格门禁下也只返回通过声纹验证的 final，不再返回 interim。
 
 如果 WebSocket 握手返回 `403 Forbidden`，但 `GET /health` 和 `/docs` 正常，优先确认服务端已经部署最新后端代码并重启 PM2。当前版本的 `/ws/asr/final` 和 `/ws/asr/transcribe` 不做 token 鉴权、不限制 Origin；正确启动后握手日志应显示 `[accepted]`，连接成功后第一条消息为：
 
 ```json
-{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-v1"}
+{"type":"connection","status":"connected","message":"VAD final STT 已就绪","protocol":"vad-final-speaker-gate-v1","speaker_gate":"required"}
 ```
 
 ### 角色管理
