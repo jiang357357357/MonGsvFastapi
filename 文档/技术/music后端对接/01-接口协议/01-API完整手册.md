@@ -566,7 +566,8 @@ ASR 分为训练标注和实时识别两条链路：
 | 中文训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | FunASR `paraformer-large + FSMN VAD + ct-punc` |
 | 粤语训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | FunASR `UniASR 2-pass Cantonese` |
 | 英语、日语、韩语等训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | Faster-Whisper `large-v3` |
-| 单文件转录 | `/inference/transcribe` | 声纹验证通过后使用默认 `funasr` |
+| 普通单文件转录 | `/inference/transcribe` | 直接使用 ASR，不要求声纹；角色/素材音频应使用此接口 |
+| 声纹单文件转录 | `/inference/transcribe/voiceprint` | 当前用户声纹验证通过后使用 ASR |
 | 普通实时语音输入 | `/ws/asr/final` | VAD 断句后调用 final ASR，不要求声纹 |
 | 声纹实时语音输入（推荐个人模式） | `/ws/asr/final/voiceprint` | VAD 断句、声纹验证通过后调用 final ASR |
 | 旧实时入口 | `/ws/asr/transcribe` | 严格声纹门禁下不再返回 interim，仅返回验证后的 final |
@@ -575,7 +576,7 @@ ASR 分为训练标注和实时识别两条链路：
 
 ### POST /inference/transcribe
 
-单文件语音转录，面向前端设计，返回文字而非文件。
+普通单文件语音转录，面向前端设计，返回文字而非文件，不进行声纹校验。情感配置中的角色参考音频应调用此接口。
 
 **请求参数（form-data）：**
 
@@ -583,7 +584,6 @@ ASR 分为训练标注和实时识别两条链路：
 |------|------|------|--------|------|
 | `audio_file` | file | 二选一 | - | 上传音频 |
 | `audio_path` | string | 二选一 | `""` | 服务端音频路径；当前只允许 `Resources/Model` 目录内的文件 |
-| `speaker_id` | string | 是 | - | 当前登录用户 ID，必须已经通过声纹注册接口登记 |
 | `language` | string | 否 | `"zh"` | 语言 |
 | `model_type` | string | 否 | `"funasr"` | ASR 模型类型 |
 | `model_size` | string | 否 | `"large"` | 模型大小；当前会参与配置校验和驻留键，但尚未传入底层批量识别 |
@@ -606,11 +606,19 @@ ASR 分为训练标注和实时识别两条链路：
       "text": "今天的天气真好，适合出门散步。"
     }
   ],
-  "processing_time": 1.5
+  "processing_time": 1.5,
+  "speaker": null,
+  "speaker_verified": false
 }
 ```
 
 `segments` 当前是逐文件识别记录，不包含 `start`、`end` 时间戳。上传文件使用临时路径，响应返回后该临时文件会被删除，不应把 `audio_path` 当作可长期访问的资源地址。
+
+### POST /inference/transcribe/voiceprint
+
+带当前用户声纹门禁的单文件转录。请求参数与 `/inference/transcribe` 相同，但会先验证服务端配置的个人声纹；未注册、音频有效人声过短或声纹不匹配时返回 HTTP 403，且不会执行 ASR。验证通过时响应额外包含 `speaker` 信息，并返回 `speaker_verified: true`。
+
+该接口用于“只接受当前用户语音”的个人输入场景，不要用于角色参考音频、训练素材或其他说话人的录音。
 
 ### POST /inference/transcribe/models/load
 
@@ -648,10 +656,10 @@ POST /asr/speaker/register/
 | 参数 | 必填 | 说明 |
 |------|------|------|
 | `audio_file` | 是 | 当前用户的干净单人语音，建议 5～10 秒 |
-| `speaker_id` | 是 | music 后端认证后的用户 ID |
+| `speaker_id` | 否 | 兼容字段；个人模式下忽略该值，实际固定使用服务端 `PERSONAL_SPEAKER_ID` |
 | `name` | 是 | 展示名称 |
 
-同一个 `speaker_id` 再次注册会更新原声纹。注销使用 `POST /asr/speaker/unregister/`，字段为 `speaker_id`；查询使用 `GET /asr/speaker/list/`。实时和单文件 ASR 必须传入同一个 `speaker_id`。
+个人模式只维护一枚声纹。再次注册会更新 `PERSONAL_SPEAKER_ID` 对应的声纹；注销接口同样忽略客户端 `speaker_id` 并注销该个人声纹，查询使用 `GET /asr/speaker/list/`。普通 ASR 接口不读取声纹身份，带 `/voiceprint` 的接口则始终使用服务端固定身份，客户端不能切换验证对象。
 
 服务端默认相似度阈值为 `SPEAKER_SIMILARITY_THRESHOLD=0.75`，最短验证语音为 `SPEAKER_MIN_AUDIO_MS=1000`。阈值应使用实际设备录音做误接收/误拒绝测试后再调整。
 
@@ -857,7 +865,7 @@ ws://host:40302/ws/asr/transcribe
 
 ```text
 1. 建立 WebSocket
-2. 发送 {"command":"start","speaker_id":"music-user-123"}
+2. 发送 {"command":"start"}（个人模式固定使用服务端 `PERSONAL_SPEAKER_ID`）
 3. 持续发送 PCM int16 二进制帧
 4. VAD 断句并通过声纹验证后接收 final
 5. 结束时发送 {"command":"stop"}

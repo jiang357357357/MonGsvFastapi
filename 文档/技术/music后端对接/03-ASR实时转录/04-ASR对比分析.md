@@ -288,7 +288,8 @@ music 后端/前端建议这样用：
 | 需求 | 调用接口 |
 |------|----------|
 | 上传音频并训练角色 | `/workflow/training/full` 或 `/workflow/complete` |
-| 单文件转录 | `/inference/transcribe` |
+| 普通单文件转录（角色/素材音频） | `/inference/transcribe` |
+| 只接受当前用户的单文件转录 | `/inference/transcribe/voiceprint` |
 | 普通实时麦克风识别 | `/ws/asr/final` |
 | 只接受当前用户的实时识别 | `/ws/asr/final/voiceprint` |
 | 旧实时入口 | `/ws/asr/transcribe`（声纹验证后仅返回 final） |

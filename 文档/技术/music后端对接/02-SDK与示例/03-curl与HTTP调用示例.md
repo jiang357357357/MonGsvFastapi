@@ -217,7 +217,6 @@ curl -s "http://localhost:40302/inference/ref-audio?path=Resources/Model/Standal
 ```bash
 curl -X POST "http://localhost:40302/inference/transcribe" \
   -F "audio_file=@/path/to/speech.wav" \
-  -F "speaker_id=music-user-123" \
   -F "language=zh" \
   -F "model_type=funasr"
 ```
@@ -237,11 +236,26 @@ curl -X POST "http://localhost:40302/inference/transcribe" \
       "text": "今天的天气真好，适合出门散步。"
     }
   ],
-  "processing_time": 1.5
+  "processing_time": 1.5,
+  "speaker": null,
+  "speaker_verified": false
 }
 ```
 
 当前 `segments` 是逐文件识别记录，不含 `start`、`end` 时间戳。上传音频对应的 `audio_path` 是服务端临时路径，响应完成后会被清理。
+
+### 仅转录当前用户的音频
+
+需要声纹门禁时改用独立接口；未注册、有效人声过短或声纹不匹配时返回 HTTP 403，并且不会执行 ASR：
+
+```bash
+curl -X POST "http://localhost:40302/inference/transcribe/voiceprint" \
+  -F "audio_file=@/path/to/current-user.wav" \
+  -F "language=zh" \
+  -F "model_type=funasr"
+```
+
+角色音频、训练素材及情感参考音频不是当前用户本人声音，应继续使用普通 `/inference/transcribe`。
 
 ### 指定音频路径识别
 
@@ -775,14 +789,16 @@ function startStreamingTTS({ roleId, emotion, text, enqueuePcmChunk }) {
 ### ASR 转录
 
 ```javascript
-async function transcribeAudio(audioBlob, currentUserId) {
+async function transcribeAudio(audioBlob, useVoiceprint = false) {
   const formData = new FormData();
   formData.append('audio_file', audioBlob, 'speech.wav');
-  formData.append('speaker_id', currentUserId);
   formData.append('language', 'zh');
   formData.append('model_type', 'funasr');
 
-  const res = await fetch('http://localhost:40302/inference/transcribe', {
+  const path = useVoiceprint
+    ? '/inference/transcribe/voiceprint'
+    : '/inference/transcribe';
+  const res = await fetch(`http://localhost:40302${path}`, {
     method: 'POST',
     body: formData,
   });
