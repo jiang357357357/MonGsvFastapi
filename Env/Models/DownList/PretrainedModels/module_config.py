@@ -16,6 +16,7 @@ CONFIG = {
         "g2pw-chinese",
         "gsv-v2final-pretrained",
         "gsv-v4-pretrained",
+        "gsv-v5-pretrained",
         "models--nvidia--bigvgan_v2_24khz_100band_256x",
         "sv",
         "v2Pro",
@@ -39,4 +40,16 @@ CONFIG = {
         "s2G488k.pth",
         "s2Gv3.pth",
     ],
+    "v5_repo": "lj1995/GPT-SoVITS",
+    "v5_revision": "8f8857563c040d542de108a2c18b0425abd6c9c5",
+    "v5_files": {
+        "gsv-v5-pretrained/s2Gv5dev.pth": "16c11fc588a9229a479316a11fc0f518087e79773f5271666a90b39d50460407",
+        "gsv-v5-pretrained/s2Gv5turbo.pth": "287b32a06b7d486f5303ec520468b0728fb01aac8b0f5d86fd5455c9a1d3e022",
+        "gsv-v5-pretrained/vocoder.pth": "b7543c83222aa2105bb4efb56845086bc5f2eeba61243d723ffa062052b3221f",
+    },
+    "v5_sizes": {
+        "gsv-v5-pretrained/s2Gv5dev.pth": 766385517,
+        "gsv-v5-pretrained/s2Gv5turbo.pth": 766406144,
+        "gsv-v5-pretrained/vocoder.pth": 57761163,
+    },
 }

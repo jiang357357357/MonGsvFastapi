@@ -55,17 +55,12 @@ def main():
         n_gpus = torch.cuda.device_count()
     else:
         n_gpus = 1
+    if n_gpus <= 1:
+        run(0, n_gpus, hps)
+        return
+
     os.environ["MASTER_ADDR"] = "127.0.0.1"
     os.environ["MASTER_PORT"] = str(randint(20000, 55555))
-
-    if n_gpus <= 1:
-        run(
-            0,
-            n_gpus,
-            hps,
-            False,
-        )
-        return
 
     mp.spawn(
         run,
@@ -73,12 +68,27 @@ def main():
         args=(
             n_gpus,
             hps,
-            True,
         ),
     )
 
 
-def run(rank, n_gpus, hps, use_distributed=True):
+def run(rank, n_gpus, hps):
+    use_ddp = torch.cuda.is_available() and n_gpus > 1
+    try:
+        if use_ddp:
+            dist.init_process_group(
+                backend="gloo" if os.name == "nt" else "nccl",
+                init_method="env://?use_libuv=False",
+                world_size=n_gpus,
+                rank=rank,
+            )
+        _run(rank, n_gpus, hps, use_ddp)
+    finally:
+        if use_ddp and dist.is_initialized():
+            dist.destroy_process_group()
+
+
+def _run(rank, n_gpus, hps, use_ddp):
     global global_step
     if rank == 0:
         logger = utils.get_logger(hps.data.exp_dir)
@@ -87,13 +97,6 @@ def run(rank, n_gpus, hps, use_distributed=True):
         writer = SummaryWriter(log_dir=hps.s2_ckpt_dir)
         writer_eval = SummaryWriter(log_dir=os.path.join(hps.s2_ckpt_dir, "eval"))
 
-    if use_distributed:
-        dist.init_process_group(
-            backend="gloo" if os.name == "nt" or not torch.cuda.is_available() else "nccl",
-            init_method="env://?use_libuv=False",
-            world_size=n_gpus,
-            rank=rank,
-        )
     torch.manual_seed(hps.train.seed)
     if torch.cuda.is_available():
         torch.cuda.set_device(rank)
@@ -127,16 +130,16 @@ def run(rank, n_gpus, hps, use_distributed=True):
         shuffle=True,
     )
     collate_fn = TextAudioSpeakerCollate()
-    single_process_mode = not use_distributed
+    worker_count = max(0, int(getattr(hps.train, "num_workers", 4 if use_ddp else 0)))
     train_loader = DataLoader(
         train_dataset,
-        num_workers=0 if single_process_mode else 5,
+        num_workers=worker_count,
         shuffle=False,
         pin_memory=True,
         collate_fn=collate_fn,
         batch_sampler=train_sampler,
-        persistent_workers=False if single_process_mode else True,
-        prefetch_factor=None if single_process_mode else 3,
+        persistent_workers=worker_count > 0,
+        prefetch_factor=2 if worker_count > 0 else None,
     )
     # if rank == 0:
     #     eval_dataset = TextAudioSpeakerLoader(hps.data.validation_files, hps.data, val=True)
@@ -177,11 +180,11 @@ def run(rank, n_gpus, hps, use_distributed=True):
     #     betas=hps.train.betas,
     #     eps=hps.train.eps,
     # )
-    if torch.cuda.is_available() and use_distributed:
+    if use_ddp:
         net_g = DDP(net_g, device_ids=[rank], find_unused_parameters=True)
         # net_d = DDP(net_d, device_ids=[rank], find_unused_parameters=True)
-    else:
-        net_g = net_g.cuda(rank) if torch.cuda.is_available() else net_g.to(device)
+    elif not torch.cuda.is_available():
+        net_g = net_g.to(device)
         # net_d = net_d.to(device)
 
     try:  # 如果能加载自动resume
@@ -213,14 +216,10 @@ def run(rank, n_gpus, hps, use_distributed=True):
         ):
             if rank == 0:
                 logger.info("loaded pretrained %s" % hps.train.pretrained_s2G)
+            model_g = net_g.module if hasattr(net_g, "module") else net_g
             print(
                 "loaded pretrained %s" % hps.train.pretrained_s2G,
-                net_g.module.load_state_dict(
-                    torch.load(hps.train.pretrained_s2G, map_location="cpu", weights_only=False)["weight"],
-                    strict=False,
-                )
-                if torch.cuda.is_available()
-                else net_g.load_state_dict(
+                model_g.load_state_dict(
                     torch.load(hps.train.pretrained_s2G, map_location="cpu", weights_only=False)["weight"],
                     strict=False,
                 ),

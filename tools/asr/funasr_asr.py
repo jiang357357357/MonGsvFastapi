@@ -12,6 +12,12 @@ from tqdm import tqdm
 funasr_models: Dict[str, Any] = {}  # 存储模型避免重复加载
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg"}
 SUPPORTED_BACKENDS = ("classic", "fun-asr-nano", "sensevoice")
+FUN_ASR_NANO_MODEL_ID = "FunAudioLLM/Fun-ASR-Nano-2512"
+FUN_ASR_NANO_MODEL_SOURCES = (
+    {"model": FUN_ASR_NANO_MODEL_ID, "hub": "hf", "trust_remote_code": True},
+    {"model": FUN_ASR_NANO_MODEL_ID, "hub": "ms", "trust_remote_code": False},
+)
+
 
 
 def has_required_files(local_dir, required_files):
@@ -57,6 +63,29 @@ def only_asr(input_file, language, backend="classic"):
     return text
 
 
+def is_unregistered_model_error(exc):
+    message = str(exc).lower()
+    return "model" in message and "not registered" in message
+
+
+def create_fun_asr_nano_model(device):
+    common_kwargs = dict(
+        vad_model="fsmn-vad",
+        device=device,
+        disable_update=True,
+    )
+    last_error = None
+    for model_source in FUN_ASR_NANO_MODEL_SOURCES:
+        try:
+            return AutoModel(**model_source, **common_kwargs)
+        except (KeyError, RuntimeError, ValueError) as exc:
+            if not is_unregistered_model_error(exc):
+                raise
+            last_error = exc
+
+    raise last_error
+
+
 def create_model(language="zh", use_cache=True, backend="classic"):
     backend = normalize_backend(backend)
     if language == "yue" and backend in ("fun-asr-nano", "sensevoice"):
@@ -72,14 +101,7 @@ def create_model(language="zh", use_cache=True, backend="classic"):
             return funasr_models[cache_key]
 
         if backend == "fun-asr-nano":
-            model = AutoModel(
-                model="FunAudioLLM/Fun-ASR-Nano-2512",
-                trust_remote_code=True,
-                hub="hf",
-                vad_model="fsmn-vad",
-                device=device,
-                disable_update=True,
-            )
+            model = create_fun_asr_nano_model(device)
             print(f"FunASR Fun-ASR-Nano 模型加载完成: {language.upper()}")
         else:
             model = AutoModel(

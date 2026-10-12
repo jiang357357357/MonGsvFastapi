@@ -20,6 +20,40 @@
 - 统一 FastAPI 网关
 - 前端调试页和后端接口联调
 
+## 官方内核与 V5
+
+当前内核合并自官方 GPT-SoVITS `1b47ca07ef43a284e0b8bd7f29d3e1e3ff76082a`。
+模型版本包含 `v5dev`、`v5turbo`。V5 导出的 LoRA 需要对应底模和
+`gsv-v5-pretrained/vocoder.pth`，GPT 底模使用 `s1v3.ckpt`。
+
+在已有 Linux `.venv` 中更新本次新增依赖：
+
+```bash
+uv --no-config pip install --python .venv/bin/python transformers==4.51.3 resampy==0.4.3
+.venv/bin/python Env/Models/DownList/PretrainedModels/download_v5.py
+```
+
+下载脚本固定官方模型修订版本并校验 SHA-256，支持分段续传。
+`--target` 可指定模型目录，`--workers` 可设置下载并发数。
+Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。
+
+合成接口可选传入 `sample_steps`、`cfg_rate`。省略时由模型选择默认值：
+V5 Turbo 使用 4 步，V5 Dev 使用 CFG 1.30。`inference_mode=normal`
+关闭两个加速开关；`accelerated` 按设备能力尝试 CUDA Graph 和 FlashAttention。
+V5 WebSocket 使用分段音频返回，`ready.stream_mode` 为 `segments`，输出为 48 kHz。
+
+真实 GPU 测试命令：
+
+```bash
+.venv/bin/python Script/Test/upstream_v5_smoke.py --v5 --graph
+.venv/bin/python Script/Test/upstream_training_smoke.py --version v5turbo
+.venv/bin/python -m unittest discover -s Code/FastApi/tests -v
+```
+
+推理测试输出 WAV 和 JSON 到 `Data/Output/UpgradeV5`；训练测试在
+`Data/Temp/UpgradeV5Training` 使用独立工作区，完成一个小数据训练轮次并导出权重。
+训练导出的 V5 LoRA 可使用 `upstream_v5_smoke.py --lora <权重路径> --graph` 复测。
+
 ## 仓库结构
 
 ```text
