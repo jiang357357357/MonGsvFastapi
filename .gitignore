@@ -88,6 +88,7 @@ down/
 # Keep metadata if you later want to version it separately.
 # ------------------------------------------------------------
 Resources/Train/Projects/
+Data/Training/
 Resources/Model/**/GPT/
 Resources/Model/**/SoVITS/
 Resources/Model/**/emotion/
