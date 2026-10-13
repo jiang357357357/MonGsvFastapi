@@ -66,19 +66,28 @@ def download(target, workers=8, variant="all", transport="requests", attempts=4)
         size, chunk_size = sizes[filename], 4 * 1024 * 1024
         count = (size + chunk_size - 1) // chunk_size
         url = f"{endpoint}/{CONFIG['v5_repo']}/resolve/{CONFIG['v5_revision']}/{filename}"
-        # Resolve once so every part can use the CDN without repeating Hub
-        # metadata requests. The signed public asset URL is kept in memory.
-        for attempt in range(attempts):
-            try:
-                with session().get(url, params={"download": "true", "_refresh": str(int(time.time()))},
-                                   headers={"Range": "bytes=0-0"}, stream=True, timeout=(15, 30)) as response:
-                    response.raise_for_status()
-                    download_url = response.url
-                break
-            except requests.RequestException:
-                if attempt == attempts - 1:
-                    raise
-                time.sleep(min(attempt + 1, 6))
+        # Share the CDN link between parts and renew it before its one-hour
+        # expiry. The public signed URL is only kept in memory.
+        link = {"url": None, "updated": 0.0}
+        link_lock = threading.Lock()
+
+        def resolve_download_url():
+            with link_lock:
+                if link["url"] and time.monotonic() - link["updated"] < 3000:
+                    return link["url"]
+                for attempt in range(attempts):
+                    try:
+                        with session().get(url, params={"download": "true", "_refresh": str(time.time_ns())},
+                                           headers={"Range": "bytes=0-0"}, stream=True, timeout=(15, 30)) as response:
+                            response.raise_for_status()
+                            link.update(url=response.url, updated=time.monotonic())
+                        return link["url"]
+                    except requests.RequestException:
+                        if attempt == attempts - 1:
+                            raise
+                        time.sleep(min(attempt + 1, 6))
+
+        resolve_download_url()
 
         def get_part(index):
             start, end = index * chunk_size, min(size, (index + 1) * chunk_size) - 1
@@ -87,6 +96,7 @@ def download(target, workers=8, variant="all", transport="requests", attempts=4)
                 return
             for attempt in range(attempts):
                 try:
+                    download_url = resolve_download_url()
                     temporary = part.with_suffix(".partial")
                     offset = temporary.stat().st_size if temporary.exists() else 0
                     if offset > end - start + 1:

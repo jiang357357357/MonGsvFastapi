@@ -20,10 +20,12 @@ from Code.FastApi.Base.DatasetFormatting.semantic_encoding.service import (
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", default="v5turbo")
+    parser.add_argument("--model", type=Path)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     assert torch.cuda.is_available(), "Real CUDA hardware is required"
     source = ROOT / "Resources/Train/Projects/明日方舟/霍尔海雅/v2ProPlus/dataset"
-    output = ROOT / "Data/Output/UpgradeV5" / ("semantic-" + args.version)
+    output = args.output or ROOT / "Data/Output/UpgradeV5" / ("semantic-" + args.version)
     output.mkdir(parents=True, exist_ok=True)
     selected = [line.split("\t") for line in (source / "2-name2text.txt").read_text().splitlines()
                 if len(line.split("\t")) == 4 and (source / "4-cnhubert" / (line.split("\t")[0] + ".pt")).is_file()][:2]
@@ -34,7 +36,7 @@ def main():
     response = service.encode_semantic_sync(SemanticEncodingRequest(
         input_text_file=str(annotations), cnhubert_dir=str(source / "4-cnhubert"),
         experiment_name="upgrade-smoke", output_dir=str(output),
-        config=SemanticEncodingConfig(version=args.version, device="cuda"),
+        config=SemanticEncodingConfig(version=args.version, device="cuda", pretrained_s2G=str(args.model) if args.model else ""),
     ))
     assert response.success and response.processed_count == 2 and response.failed_count == 0, asdict(response)
     rows = Path(response.output_file).read_text().splitlines()[1:]
