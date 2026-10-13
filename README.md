@@ -35,6 +35,8 @@ uv --no-config pip install --python .venv/bin/python transformers==4.51.3 resamp
 
 下载脚本固定官方模型修订版本并校验 SHA-256，支持分段续传。
 `--target` 可指定模型目录，`--workers` 可设置下载并发数。
+`--variant v5turbo` 可只下载一个模型，`--variant vocoder` 只下载声码器；
+网络连接不稳定时可使用 `--transport curl --attempts 20`（需安装 curl）。
 Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。
 
 合成接口可选传入 `sample_steps`、`cfg_rate`。省略时由模型选择默认值：
@@ -47,12 +49,16 @@ V5 WebSocket 使用分段音频返回，`ready.stream_mode` 为 `segments`，输
 ```bash
 .venv/bin/python Script/Test/upstream_v5_smoke.py --v5 --graph
 .venv/bin/python Script/Test/upstream_training_smoke.py --version v5turbo
+.venv/bin/python Script/Test/upstream_training_smoke.py --version v2ProPlus --gpt
+.venv/bin/python Script/Test/upstream_semantic_smoke.py --version v5turbo
+.venv/bin/python Script/Test/upstream_gateway_smoke.py --version v5turbo --url http://127.0.0.1:40322
 .venv/bin/python -m unittest discover -s Code/FastApi/tests -v
 ```
 
 推理测试输出 WAV 和 JSON 到 `Data/Output/UpgradeV5`；训练测试在
 `Data/Temp/UpgradeV5Training` 使用独立工作区，完成一个小数据训练轮次并导出权重。
 训练导出的 V5 LoRA 可使用 `upstream_v5_smoke.py --lora <权重路径> --graph` 复测。
+网关测试需要先启动独立网关实例，会创建并自动删除临时测试角色。
 
 ## 仓库结构
 

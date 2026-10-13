@@ -22,8 +22,11 @@ from Code.FastApi.Base.Inference.service import InferenceConfig, InferenceReques
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--v5", action="store_true")
+    parser.add_argument("--version", choices=["v2ProPlus", "v5dev", "v5turbo"])
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--lora", type=Path)
+    parser.add_argument("--gpt", type=Path, help="Use an exported GPT checkpoint")
+    parser.add_argument("--sovits", type=Path, help="Use an exported full SoVITS checkpoint")
     parser.add_argument("--output", default="Data/Output/UpgradeV5")
     args = parser.parse_args()
     output = (ROOT / args.output).resolve()
@@ -37,9 +40,19 @@ async def main():
         for version in ("v5dev", "v5turbo"):
             models.append((version, ROOT / "GPT_SoVITS/pretrained_models/s1v3.ckpt",
                            ROOT / f"GPT_SoVITS/pretrained_models/gsv-v5-pretrained/s2G{version}.pth"))
+    if args.version:
+        if args.version == "v2ProPlus":
+            models = models[:1]
+        else:
+            models = [(args.version, ROOT / "GPT_SoVITS/pretrained_models/s1v3.ckpt",
+                       ROOT / f"GPT_SoVITS/pretrained_models/gsv-v5-pretrained/s2G{args.version}.pth")]
     if args.lora:
         version = {b"07": "v5dev", b"08": "v5turbo"}[args.lora.open("rb").read(2)]
         models = [(version, ROOT / "GPT_SoVITS/pretrained_models/s1v3.ckpt", args.lora)]
+    if args.gpt or args.sovits:
+        assert len(models) == 1, "Choose one model version for checkpoint reload checks"
+        version, gpt, sovits = models[0]
+        models = [(version, args.gpt or gpt, args.sovits or sovits)]
     assert torch.cuda.is_available(), "A real CUDA device is required"
     report = {"gpu": torch.cuda.get_device_name(0), "torch": torch.__version__, "reference": str(reference), "cases": []}
     service = InferenceService(str(ROOT))
@@ -71,8 +84,13 @@ async def main():
             if args.graph:
                 cases.append(("graph", "现在测试加速模式下的语音合成。", "zh", 1.0))
                 cases.append(("graph-warm", "现在测试加速模式下的语音合成。", "zh", 1.0))
+            if version.startswith("v5"):
+                cases.append(("sampling", "测试自定义采样参数。", "zh", 1.0))
             for label, text, language, speed in cases:
                 config = InferenceConfig(seed=1234, speed=speed, use_cuda_graph=label.startswith("graph"), use_flash_attention=False)
+                if label == "sampling":
+                    config.sample_steps = 8 if version == "v5dev" else 2
+                    config.cfg_rate = 1.0 if version == "v5dev" else 0.0
                 request = InferenceRequest(text=text, text_language=language, ref_audio_path=str(reference),
                                            prompt_text=prompt, prompt_language="zh", config=config)
                 torch.cuda.reset_peak_memory_stats()
