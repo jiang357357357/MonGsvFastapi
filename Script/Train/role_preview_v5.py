@@ -66,7 +66,8 @@ async def main():
 
     async def train(label, service, request):
         previous = report["training"].get(label)
-        if previous and previous["status"] == "completed" and previous["config"] == request.config.model_dump() and Path(previous["model"]).is_file():
+        previous_config = type(request.config).model_validate(previous["config"]).model_dump() if previous else None
+        if previous and previous["status"] == "completed" and previous_config == request.config.model_dump() and Path(previous["model"]).is_file():
             return Path(previous["model"])
         started = time.perf_counter()
         response = await service.start_training(request)
