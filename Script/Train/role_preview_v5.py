@@ -39,6 +39,7 @@ async def main():
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--output", default="Data/Output/AronaV5Preview")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--fresh-sovits", action="store_true", help="Train SoVITS from its pretrained base in a new workspace")
     args = parser.parse_args()
     assert torch.cuda.is_available(), "Real CUDA hardware is required"
     source = ROOT / "Resources/Train/Projects" / args.world / args.role / "v2ProPlus/dataset"
@@ -134,9 +135,22 @@ async def main():
             config=GPTTrainingConfig(version=args.version, total_epoch=args.gpt_epochs,
                                      batch_size=8, num_workers=0, save_every_epoch=5),
         ))
+        sovits_workspace = workspace
+        if args.fresh_sovits:
+            sovits_workspace = workspace / "runs" / ("sovits-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+            run_dataset = sovits_workspace / "dataset"
+            run_dataset.mkdir(parents=True)
+            # Link only feature data; checkpoint directories stay isolated so
+            # the official automatic resume cannot load the previous run.
+            for name in ("2-name2text.txt", "3-bert", "4-cnhubert", "5-wav32k", "6-name2semantic.tsv"):
+                (run_dataset / name).symlink_to((dataset / name).resolve(), target_is_directory=(dataset / name).is_dir())
+            report["previous_sovits"] = report["training"].pop("sovits", None)
+            report["fresh_sovits_workspace"] = str(sovits_workspace)
+            report["sovits_retrained_at"] = datetime.now().isoformat()
+            save()
         sovits = await train("sovits", SoVITSTrainingService(str(ROOT)), SoVITSTrainingRequest(
-            exp_name=experiment, exp_root=str(workspace.parent), workspace_dir=str(workspace),
-            model_output_dir=str(workspace / "export/SoVITS"),
+            exp_name=experiment, exp_root=str(workspace.parent), workspace_dir=str(sovits_workspace),
+            model_output_dir=str(sovits_workspace / "export/SoVITS"),
             config=SoVITSTrainingConfig(version=args.version, total_epoch=args.sovits_epochs,
                                         batch_size=4, save_every_epoch=1, lora_rank=args.lora_rank, if_grad_ckpt=True),
         ))
