@@ -1,0 +1,7 @@
+{
+  "host": "127.0.0.1",
+  "backend_port": 40302,
+  "frontend_port": 40031,
+  "startup_timeout": 600,
+  "open_browser": true
+}

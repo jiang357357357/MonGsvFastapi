@@ -1,6 +1,7 @@
 # API 完整手册
 
-> 统一网关基础地址：`http://{host}:{port}`，默认 `http://localhost:40302`
+> 统一网关基础地址：`http://{host}:{port}`，默认 `http://localhost:40302`。
+> 核对日期：2026-10-24；描述当前工作区实现，官方新增能力和已知问题不代表已经接入或修复。
 
 ## 通用说明
 
@@ -14,11 +15,13 @@
 
 ### 认证
 
-默认不启用。启动时加 `--enable-auth --api-key xxx` 后，所有请求需携带：
+默认不启用。启动时加 `--enable-auth --api-key xxx` 后，接入了认证依赖的 HTTP 接口（包括训练工作台、训练和推理接口）需携带：
 
 ```http
 Authorization: Bearer {api_key}
 ```
+
+当前领域 CRUD、`/services/reload/{service_name}` 和 WebSocket 路由没有统一接入该认证依赖；开启此参数不等于所有路由都已受保护。声纹校验是独立的业务能力。
 
 ### 响应格式
 
@@ -211,7 +214,7 @@ CNHuBERT 语义编码。
 | `workspace_dir` | string | 二选一 | `""` | 工作区目录（与 exp_root 二选一） |
 | `model_output_dir` | string | 否 | `""` | 模型输出目录 |
 | `version` | string | 否 | `"v2Pro"` | 模型版本 |
-| `batch_size` | int | 否 | `8` | 批次大小 |
+| `batch_size` | int | 否 | 自动计算 | 按显存和精度选择，至少为 1 |
 | `total_epoch` | int | 否 | `15` | 总训练轮数 |
 
 **响应示例：**
@@ -220,8 +223,12 @@ CNHuBERT 语义编码。
   "success": true,
   "message": "GPT训练已启动",
   "job_id": "gpt_20260522_123456",
-  "exp_name": "my_project",
-  "status": "running",
+  "status": {
+    "job_id": "gpt_20260522_123456",
+    "status": "running",
+    "current_epoch": 0,
+    "total_epochs": 15
+  },
   "config_file": "/output/train/config.yaml",
   "log_dir": "/output/train/logs",
   "model_dir": "/output/train/models"
@@ -230,7 +237,78 @@ CNHuBERT 语义编码。
 
 ### POST /training/sovits/start
 
-启动 SoVITS 训练。参数与 GPT 训练类似，区别是默认 `batch_size=32`、`total_epoch=8`。
+启动 SoVITS 训练，表单字段与 GPT 单项接口相同。`batch_size` 不传时自动计算；`total_epoch` 不传时 V1/V2/Pro 系列为 8，V3/V4/V5 系列为 2。
+
+两个单项接口都支持 `v1/v2/v2Pro/v2ProPlus/v3/v4/v5dev/v5turbo`，只接收上表字段。学习率、GPU 编号、LoRA rank 等高级调参请使用训练工作台。所有入口最终均将保存间隔设为对应总轮数；传入旧保存间隔不能改变此策略。
+
+### 训练工作台 /training/workbench
+
+推荐新对接使用此组接口，详见 [训练与模型](../04-训练与模型/README.md)。
+
+| 方法与路径 | 请求 / 返回 |
+|------------|-------------|
+| `GET /training/workbench/defaults` | 返回 `source`、`save_policy="final_only"`、八版本默认值 `versions` |
+| `GET /training/workbench/workspaces` | Query 必填 `world_name`、`project_name`；返回 `versions`、`resume_choices` |
+| `POST /training/workbench/start` | multipart：必填 `options` JSON 字符串，可重复上传 `audio_files` |
+| `GET /training/workbench/runs` | 返回 `{"runs":[...]}`，最多最近 100 条，不附完整曲线 |
+| `GET /training/workbench/runs/{workflow_id}` | 直接返回任务记录，包含 `targets[].telemetry` |
+| `POST /training/workbench/runs/{workflow_id}/stop` | 返回停止请求后的记录；预处理阶段可能到阶段边界才退出 |
+| `GET /training/workbench/runs/{workflow_id}/logs` | Query `target=gpt` 或 `sovits`（默认）；返回 `target/log_file/text` |
+| `POST /training/workbench/runs/{workflow_id}/preview` | JSON：必填 `text`、`emotion`，可选 `seed=2027`；返回合成结果及试听路径 |
+
+`options` 字段：
+
+| 字段 | 必填 / 默认 | 说明 |
+|------|-------------|------|
+| `world_name`、`project_name`、`version` | 必填 | 世界名、角色名、模型版本；支持上述八个版本 |
+| `role_mode` | `existing` | `new` 创建新角色；`existing` 使用已有角色 |
+| `training_mode` | `fresh` | `fresh` 独立重训；`resume` 续训 |
+| `preprocessing_mode` | `cached` | `full` 原始音频全流程；`existing` 已有切片与标注；`cached` 复用特征 |
+| `input_audio_dir` | `""` | 服务端音频目录；`full` 也可上传 `audio_files` |
+| `list_file` | `""` | `existing` 模式必填的服务端标注文件 |
+| `source_version`、`source_workspace` | `""` | 缓存来源；留空时按目标版本寻找可用特征 |
+| `resume_workspace` | `""` | 续训必填，使用 `resume_choices` 返回的工作区 |
+| `train_gpt`、`train_sovits` | 均为 `true` | 至少选择一个 |
+| `training_order` | `sovits_first` | 也可为 `gpt_first` |
+| `language` | `zh` | 训练标注语言 |
+| `gpu_numbers` | `0` | 如 `0` 或 `0,1`，服务端规范为 `0-1`；工作台要求可用 CUDA |
+| `gpt_batch_size`、`sovits_batch_size` | 自动计算 | 根据硬件选择；显式值必须 >= 1 |
+| `gpt_total_epoch` | 15 | 累计总轮数，续训时必须大于已完成轮数 |
+| `sovits_total_epoch` | 8 或 2 | 普通版本 8，V3/V4/V5 为 2 |
+| `gpt_learning_rate`、`sovits_learning_rate` | 0.01 / 0.0001 | 学习率 |
+| `lora_rank` | 32 | LoRA 秩；续训必须匹配原 checkpoint |
+| `grad_checkpoint`、`fp16`、`log_interval` | false / 按硬件 / 100 | 梯度检查点、精度、Step 日志间隔 |
+| `publish_models` | true | 完成后复制最终模型到角色资源目录 |
+| `save_every_epoch`、`gpt_save_every_epoch`、`sovits_save_every_epoch` | 兼容字段 | 一律覆盖为各阶段总轮数，只在最后一轮保存 |
+
+未知 `options` 字段会被拒绝。新角色示例（路径指服务端，角色已存在时改为 `existing`）：
+
+```bash
+curl -X POST "http://localhost:40302/training/workbench/start" \
+  --form-string 'options={"world_name":"DemoWorld","project_name":"DemoVoice","version":"v5turbo","role_mode":"new","training_mode":"fresh","preprocessing_mode":"full","input_audio_dir":"/data/audio/raw","language":"zh","train_gpt":true,"train_sovits":true,"gpu_numbers":"0"}'
+```
+
+启动响应的关键字段如下，实际记录还包含配置、阶段和目标详情：
+
+```json
+{
+  "success": true,
+  "training_workflow": {
+    "workflow_id": "training_20261024_120000_example",
+    "status": "queued",
+    "phase": "queued"
+  },
+  "preprocess_steps": []
+}
+```
+
+使用 `training_workflow.workflow_id` 查询本组 `/runs/{workflow_id}`，不要发送到旧 `/workflow/training/status`。工作台在后台执行预处理和训练，记录持久化于 `Data/Training/workflows`；重启后未结束任务标记为 `interrupted`，不会自动续训。旧工作流仍只保留内存记录。
+
+状态包括 `queued/running/completed/failed/stopped/interrupted`。`targets[].telemetry` 包含 `epoch_loss_history`、`loss_history`、`missing_epochs` 等，缺失轮次保持未记录，不能解释为零 Loss。日志接口为轮询接口，当前没有训练 SSE 路由。
+
+试听要求任务完成且存在可用情感，训练占用全局锁时返回 409。返回 `audio_data` 为 WAV Base64，`audio_path` 是服务端持久化试听文件。新训练最后一轮前停止可能尚无恢复 checkpoint。
+
+当前 V1 限制：工作流文本特征阶段仍使用默认 V2 清洗配置；严格复现 V1 时需先生成匹配版本特征，再走同版本缓存训练。该问题尚未修复。
 
 ### GET /training/status/{job_id}
 
@@ -243,12 +321,11 @@ CNHuBERT 语义编码。
   "status": {
     "job_id": "gpt_20260522_123456",
     "status": "running",
-    "progress": 45.0,
     "current_epoch": 7,
     "total_epochs": 15,
     "start_time": "2026-05-22T12:00:00",
-    "elapsed_time": 1234.5,
-    "eta": 1500.0
+    "current_loss": null,
+    "error_message": null
   }
 }
 ```
@@ -280,17 +357,32 @@ CNHuBERT 语义编码。
 | `world_id` | int | 否 | `null` | 世界 ID；传入时后端会校验角色是否属于该世界 |
 | `version` | string | 否 | `null` | 版本；传入时后端会校验角色是否属于该版本 |
 | `how_to_cut` | string | 否 | `"按标点符号切"` | 文本切分方式 |
-| `top_k` | int | 否 | `15` | Top-K 采样 |
-| `top_p` | float | 否 | `1.0` | Top-P 采样 |
-| `temperature` | float | 否 | `1.0` | 温度参数 |
+| `top_k` | int | 否 | `15` | Top-K，范围 1–100 |
+| `top_p` | float | 否 | `1.0` | Top-P，范围 0–1，HTTP 保留零值 |
+| `temperature` | float | 否 | `1.0` | 温度，范围 0–1，HTTP 保留零值 |
 | `speed` | float | 否 | `1.0` | 语速 |
-| `sample_steps` | int | 否 | `32` | 采样步数 |
+| `seed` | int | 否 | `-1` | -1 表示随机；可固定为 0–4294967295 |
+| `sample_steps` | int | 否 | 按版本 | 可选 4、8、16、32；不传时使用本节的模型默认值 |
+| `cfg_rate` | float | 否 | 按版本 | CFG，范围 0–2；V5 Dev 默认 1.30，其余默认 0 |
 | `if_sr` | bool | 否 | `false` | 启用音频超分 |
 | `ref_free` | bool | 否 | `false` | 无参考模式 |
 | `if_freeze` | bool | 否 | `false` | 兼容保留字段；当前新推理管线尚未实现冻结缓存 |
-| `pause_second` | float | 否 | `0.3` | 句间停顿（秒），当前已接入官方 `fragment_interval` |
+| `pause_second` | float | 否 | `0.3` | 句间停顿，范围 0.1–0.5 秒，映射为 `fragment_interval` |
 | `inference_mode` | string | 否 | `"normal"` | 推理模式：`normal` 普通推理，`accelerated` 加速推理 |
 | `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
+
+两个 HTTP 合成接口采用相同的高级参数规则：
+
+| 模型版本 | 默认 `sample_steps` | 默认 `cfg_rate` |
+|----------|------------------------:|-------------------:|
+| V3 | 32 | 0 |
+| V4 | 8 | 0 |
+| V5 Dev | 32 | 1.30 |
+| V5 Turbo | 4 | 0 |
+
+V1/V2/Pro 系列不使用这些流匹配模型采样参数。需要模型默认值时省略字段，不要统一写成 32。V4 的 8 步对齐官方 WebUI；官方 API 管线省略参数时的默认值不同。
+
+`if_freeze` 当前不生效。两个 HTTP 入口返回完整 WAV 结果，未开放官方 `media_type`、`output_format` 或 `gpt_streaming` 参数；底层编码函数即使指定其他格式仍会写成 WAV，调用方不可按扩展名推断格式。
 
 **后端内部解析规则：**
 
@@ -343,14 +435,16 @@ CNHuBERT 语义编码。
 
 流式文本转语音。适合 LLM delta、长文本和实时对话场景。调用方发送文本流，后端按标点、长度和 flush/finish 切成 TTS 片段，并按顺序返回音频块。
 
-当前 WebSocket 固定调用底层 `streaming_mode=true`、`return_fragment=false`，对应官方模式 2（语义 Token 分块流式）。它不是官方模式 1，客户端目前也不能在 `start` 消息中选择模式 0/1/2/3。
+当前 WebSocket 请求底层 `streaming_mode=true`、`return_fragment=false`。实际行为取决于模型：
 
-| 官方模式 | 当前外部入口 | 状态 |
-|---------:|--------------|------|
-| 0 | `POST /api/synthesis/role-emotion`、`POST /inference/tts` | 已开放，完整音频一次返回 |
-| 1 | 无 | 底层已验证可用，对外接口尚未开放 |
-| 2 | `WS /ws/tts/stream` | 已开放，PCM 分块返回 |
-| 3 | 无 | 底层官方支持，对外接口尚未开放 |
+| 模型 | `ready.stream_mode` | 音频返回 |
+|------|---------------------|----------|
+| V1/V2/V2Pro/V2ProPlus | `tokens` | 旧管线的语义 Token 分块 |
+| V3/V4/V5dev/V5turbo | `segments` | 底层自动回退为整段生成后返回；V5 输出 48 kHz |
+
+本后端尚未合入官方 `b4570b8` 的 `gpt_streaming`。发送 `gpt_streaming` 或 `streaming_mode=0/1/2/3` 不会切换模式。两个 HTTP 入口仍返回完整音频；更完整的协议和当前限制见 [TTS WebSocket](./02-TTS流式WebSocket设计.md)。
+
+`start` 支持 `sample_steps/cfg_rate/pause_second`，默认按模型版本选择；停顿必须在 0.1–0.5 秒内。当前 `seed` 未传到底层，`top_p=0` 或 `temperature=0` 会被替换为 1，`if_freeze` 不生效。需要固定种子或合法零值时使用 HTTP。WS 推理固定关闭 CUDA Graph 和 FlashAttention。
 
 **连接地址：**
 
@@ -384,7 +478,7 @@ ws://host:40302/ws/tts/stream
 **服务端事件：**
 
 ```json
-{"type":"ready","request_id":"chat-001","format":"pcm_s16le","channels":1}
+{"type":"ready","request_id":"chat-001","format":"pcm_s16le","channels":1,"stream_mode":"tokens"}
 {"type":"audio_start","request_id":"chat-001","seq":1,"text":"博士，今天也辛苦了。","sample_rate":32000,"format":"pcm_s16le","channels":1}
 ```
 
@@ -394,6 +488,8 @@ ws://host:40302/ws/tts/stream
 {"type":"audio_end","request_id":"chat-001","seq":1,"sample_rate":32000,"bytes":123456}
 {"type":"end","request_id":"chat-001"}
 ```
+
+取消会停止异步消费与后续输出；当前后台推理线程可能继续运算，客户端还需清空已缓存音频。不要将 `cancelled` 当作 GPU 已空闲的确认。
 
 取消：
 
@@ -448,15 +544,17 @@ ws://host:40302/ws/tts/stream
 | `prompt_text` | string | 否 | `""` | 参考文本 |
 | `prompt_language` | string | 否 | `"zh"` | 参考文本语言 |
 | `how_to_cut` | string | 否 | `"按标点符号切"` | 文本切分方式 |
-| `top_k` | int | 否 | `15` | Top-K 采样 |
-| `top_p` | float | 否 | `1.0` | Top-P 采样 |
-| `temperature` | float | 否 | `1.0` | 温度参数 |
+| `top_k` | int | 否 | `15` | Top-K，范围 1–100 |
+| `top_p` | float | 否 | `1.0` | Top-P，范围 0–1，HTTP 保留零值 |
+| `temperature` | float | 否 | `1.0` | 温度，范围 0–1，HTTP 保留零值 |
 | `speed` | float | 否 | `1.0` | 语速 |
-| `sample_steps` | int | 否 | `32` | 采样步数 |
+| `seed` | int | 否 | `-1` | -1 表示随机；可固定为 0–4294967295 |
+| `sample_steps` | int | 否 | 按版本 | 可选 4、8、16、32；不传时使用下表默认值 |
+| `cfg_rate` | float | 否 | 按版本 | CFG，范围 0–2；V5 Dev 默认 1.30，其余默认 0 |
 | `if_sr` | bool | 否 | `false` | 启用音频超分 |
 | `ref_free` | bool | 否 | `false` | 无参考模式 |
 | `if_freeze` | bool | 否 | `false` | 兼容保留字段；当前新推理管线尚未实现冻结缓存 |
-| `pause_second` | float | 否 | `0.3` | 句间停顿（秒），当前已接入官方 `fragment_interval` |
+| `pause_second` | float | 否 | `0.3` | 句间停顿，范围 0.1–0.5 秒，映射为 `fragment_interval` |
 | `inference_mode` | string | 否 | `"normal"` | 推理模式：`normal` 普通推理，`accelerated` 加速推理 |
 | `return_base64` | bool | 否 | `true` | 返回 base64 音频 |
 
@@ -473,7 +571,9 @@ ws://host:40302/ws/tts/stream
 
 **推理模式说明：**
 
-`inference_mode=normal` 使用普通推理，是默认值。`inference_mode=accelerated` 会尝试使用 CUDA Graph 加速 T2S 语义 token 预测阶段，仅建议在 CUDA 服务端、非 streaming、非 ref_free、单条普通推理时启用；初始化或推理失败时后端会输出 `[cuda-graph]` 日志并自动回退普通推理。
+`inference_mode=normal` 是默认值，关闭 CUDA Graph 与 FlashAttention；`accelerated` 同时尝试两个加速开关，具体是否可用取决于设备、依赖及底层后端。当前没有分别控制两个开关的业务参数。WebSocket 固定关闭两个开关。
+
+普通 HTTP 推理仍同步占用网关事件循环，HTTP/WS 共用推理实例且缺少全局模型互斥。调用方应串行安排模型切换和合成，`MAX_CONCURRENT_JOBS` 不是已实现的 TTS 并发限额。
 
 旧字段 `use_cuda_graph` 和 `cuda_graph_mode` 已废弃，不再作为外部接口参数使用。
 
@@ -563,7 +663,7 @@ ASR 分为训练标注和实时识别两条链路：
 
 | 场景 | 推荐接口 | 使用模型 |
 |------|----------|----------|
-| 中文训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | FunASR `paraformer-large + FSMN VAD + ct-punc` |
+| 中文训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | FunASR `Fun-ASR-Nano-2512 + FSMN VAD` |
 | 粤语训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | FunASR `UniASR 2-pass Cantonese` |
 | 英语、日语、韩语等训练数据准备 | `/data-prep/asr/recognize` 或工作流接口 | Faster-Whisper `large-v3` |
 | 普通单文件转录 | `/inference/transcribe` | 直接使用 ASR，不要求声纹；角色/素材音频应使用此接口 |
@@ -622,7 +722,7 @@ ASR 分为训练标注和实时识别两条链路：
 
 ### POST /inference/transcribe/models/load
 
-准备 ASR 引擎并登记驻留状态。当前实现采用延迟加载：Paraformer 或 Whisper 的大模型权重仍在第一次实际识别时加载，因此该接口成功不代表大模型已经完成显存预热。
+准备 ASR 引擎并登记驻留状态。当前实现采用延迟加载：Fun-ASR-Nano 或 Whisper 的大模型权重仍在第一次实际识别时加载，因此该接口成功不代表大模型已经完成显存预热。
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -936,6 +1036,8 @@ ws://host:40302/ws/asr/transcribe
 
 ## 7. 工作流（一键式）
 
+本节为旧接口：HTTP 请求等待预处理结束后返回训练排队结果，记录只在内存中。新接入的独立重训、续训及持久化历史请使用第 4 节的训练工作台。
+
 ### POST /workflow/complete
 
 完整预处理工作流。内部按顺序执行：
@@ -959,10 +1061,10 @@ ws://host:40302/ws/asr/transcribe
 | `start_training` | bool | 否 | `false` | 完成后是否启动训练 |
 | `train_gpt` | bool | 否 | `true` | 训练 GPT |
 | `train_sovits` | bool | 否 | `true` | 训练 SoVITS |
-| `gpt_batch_size` | int | 否 | `8` | GPT 批次大小 |
+| `gpt_batch_size` | int | 否 | 自动计算 | GPT 批次大小 |
 | `gpt_total_epoch` | int | 否 | `15` | GPT 训练轮数 |
-| `sovits_batch_size` | int | 否 | `32` | SoVITS 批次大小 |
-| `sovits_total_epoch` | int | 否 | `8` | SoVITS 训练轮数 |
+| `sovits_batch_size` | int | 否 | 自动计算 | SoVITS 批次大小 |
+| `sovits_total_epoch` | int | 否 | 按版本 | 普通版本 8；V3/V4/V5 为 2 |
 | `training_order` | string | 否 | `"sovits_first"` | 训练顺序 |
 
 **training_order 可选值：** `"sovits_first"` / `"gpt_first"`
@@ -1359,8 +1461,9 @@ ws://host:40302/ws/asr/transcribe
 ```json
 {
   "success": true,
-  "versions": ["v1", "v2", "v3", "v4", "v2Pro", "v2ProPlus"],
-  "count": 6
+  "versions": ["v1", "v2", "v3", "v4", "v2Pro", "v2ProPlus", "v5dev", "v5turbo"],
+  "current_version": "v2Pro",
+  "default_version": "v2Pro"
 }
 ```
 
@@ -1380,3 +1483,7 @@ ws://host:40302/ws/asr/transcribe
 | `v4` | 第四代 | s1v3.ckpt | s2Gv4.pth |
 | `v2Pro` | v2 增强版（推荐） | s1v3.ckpt | s2Gv2Pro.pth |
 | `v2ProPlus` | v2Pro 升级版 | s1v3.ckpt | s2Gv2ProPlus.pth |
+| `v5dev` | V5 Dev | s1v3.ckpt | gsv-v5-pretrained/s2Gv5dev.pth |
+| `v5turbo` | V5 Turbo | s1v3.ckpt | gsv-v5-pretrained/s2Gv5turbo.pth |
+
+V5 推理需额外准备同目录的 `vocoder.pth`。`current_version/default_version` 随部署配置变化，枚举接口没有 `count` 字段，目录扫描接口有 `count`。

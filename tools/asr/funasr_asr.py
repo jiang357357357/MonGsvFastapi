@@ -3,6 +3,7 @@
 import argparse
 import os
 import traceback
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from funasr import AutoModel
@@ -13,9 +14,14 @@ funasr_models: Dict[str, Any] = {}  # 存储模型避免重复加载
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg"}
 SUPPORTED_BACKENDS = ("classic", "fun-asr-nano", "sensevoice")
 FUN_ASR_NANO_MODEL_ID = "FunAudioLLM/Fun-ASR-Nano-2512"
-FUN_ASR_NANO_MODEL_SOURCES = (
-    {"model": FUN_ASR_NANO_MODEL_ID, "hub": "hf", "trust_remote_code": True},
-    {"model": FUN_ASR_NANO_MODEL_ID, "hub": "ms", "trust_remote_code": False},
+FUN_ASR_NANO_REVISION = "272c57b82523ada6fd87095e955f8e29100979ab"
+ASR_MODELS_ROOT = Path(__file__).resolve().parent / "models"
+FUN_ASR_NANO_MODEL_DIR = ASR_MODELS_ROOT / "Fun-ASR-Nano-2512"
+FUN_ASR_NANO_REQUIRED_FILES = (
+    "config.yaml", "configuration.json", "model.pt", "multilingual.tiktoken",
+    "Qwen3-0.6B/config.json", "Qwen3-0.6B/generation_config.json",
+    "Qwen3-0.6B/tokenizer.json", "Qwen3-0.6B/tokenizer_config.json",
+    "Qwen3-0.6B/vocab.json", "Qwen3-0.6B/merges.txt",
 )
 
 
@@ -38,7 +44,7 @@ def ensure_snapshot(repo_id, local_dir, required_files):
 
 
 def normalize_backend(backend=None):
-    backend = (backend or "classic").strip().lower()
+    backend = (backend or "fun-asr-nano").strip().lower()
     aliases = {
         "damo": "classic",
         "legacy": "classic",
@@ -53,7 +59,7 @@ def normalize_backend(backend=None):
     return backend
 
 
-def only_asr(input_file, language, backend="classic"):
+def only_asr(input_file, language, backend="fun-asr-nano"):
     try:
         model = create_model(language, backend=backend)
         text = transcribe_with_model(model, input_file)
@@ -63,30 +69,40 @@ def only_asr(input_file, language, backend="classic"):
     return text
 
 
-def is_unregistered_model_error(exc):
-    message = str(exc).lower()
-    return "model" in message and "not registered" in message
+def ensure_fun_asr_nano_snapshot():
+    """Use the bundled official snapshot; download the pinned revision only if absent."""
+    path = FUN_ASR_NANO_MODEL_DIR
+    if not has_required_files(str(path), FUN_ASR_NANO_REQUIRED_FILES):
+        from huggingface_hub import snapshot_download as hf_snapshot_download
+        hf_snapshot_download(repo_id=FUN_ASR_NANO_MODEL_ID, revision=FUN_ASR_NANO_REVISION,
+                             local_dir=str(path), allow_patterns=[*FUN_ASR_NANO_REQUIRED_FILES, "README.md"])
+    if not has_required_files(str(path), FUN_ASR_NANO_REQUIRED_FILES):
+        raise FileNotFoundError(f"Fun-ASR-Nano 模型文件不完整: {path}")
+    return path
 
 
 def create_fun_asr_nano_model(device):
-    common_kwargs = dict(
-        vad_model="fsmn-vad",
+    import torch
+
+    path = ensure_fun_asr_nano_snapshot()
+    vad_path = ensure_snapshot(
+        "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
+        str(ASR_MODELS_ROOT / "speech_fsmn_vad_zh-cn-16k-common-pytorch"),
+        ["configuration.json", "model.pt"],
+    )
+    # FunASR 1.4.1 includes the official Nano implementation; no remote Python code is needed.
+    llm_dtype = "bf16" if str(device).startswith("cuda") and torch.cuda.is_bf16_supported() else "fp32"
+    return AutoModel(
+        model=str(path),
+        vad_model=vad_path,
         device=device,
         disable_update=True,
+        trust_remote_code=False,
+        llm_conf={"llm_dtype": llm_dtype},
     )
-    last_error = None
-    for model_source in FUN_ASR_NANO_MODEL_SOURCES:
-        try:
-            return AutoModel(**model_source, **common_kwargs)
-        except (KeyError, RuntimeError, ValueError) as exc:
-            if not is_unregistered_model_error(exc):
-                raise
-            last_error = exc
-
-    raise last_error
 
 
-def create_model(language="zh", use_cache=True, backend="classic"):
+def create_model(language="zh", use_cache=True, backend="fun-asr-nano"):
     backend = normalize_backend(backend)
     if language == "yue" and backend in ("fun-asr-nano", "sensevoice"):
         backend = "classic"
@@ -222,7 +238,7 @@ def write_output_file(output_folder: str, output_file_name: str, recognition_res
     return output_file_path
 
 
-def execute_asr(input_folder, output_folder, model_size, language, backend="classic"):
+def execute_asr(input_folder, output_folder, model_size, language, backend="fun-asr-nano"):
     input_files, output_file_name = resolve_inputs(input_folder)
     model = create_model(language, backend=backend)
     recognition_results: List[Dict[str, str]] = []
@@ -265,7 +281,7 @@ if __name__ == "__main__":
         "-b",
         "--backend",
         type=str,
-        default="classic",
+        default="fun-asr-nano",
         choices=SUPPORTED_BACKENDS,
         help="FunASR backend: classic Paraformer, Fun-ASR-Nano, or SenseVoice.",
     )

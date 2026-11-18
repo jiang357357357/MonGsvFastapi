@@ -94,6 +94,8 @@ module.exports = {
       cwd: PROJECT_ROOT,
       instances: 1,
       autorestart: true,
+      restart_delay: 5000,
+      exp_backoff_restart_delay: 100,
       watch: false,
       max_memory_restart: '100M',
       env: {},

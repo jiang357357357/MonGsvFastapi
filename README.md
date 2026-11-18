@@ -39,10 +39,18 @@ uv --no-config pip install --python .venv/bin/python transformers==4.51.3 resamp
 网络连接不稳定时可使用 `--transport curl --attempts 20`（需安装 curl）。
 Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。
 
-合成接口可选传入 `sample_steps`、`cfg_rate`。省略时由模型选择默认值：
-V5 Turbo 使用 4 步，V5 Dev 使用 CFG 1.30。`inference_mode=normal`
+合成接口可选传入 `sample_steps`、`cfg_rate`，默认值对齐官方 WebUI：
+V3 为 32 步，V4 为 8 步，V5 Dev 为 32 步 / CFG 1.30，V5 Turbo 为 4 步 / CFG 0。
+步数可选 4、8、16、32，CFG 范围 0–2，Top K 范围 1–100，Top P 和温度范围 0–1，
+句间停顿范围 0.1–0.5 秒；前端提供“恢复官方默认”。`inference_mode=normal`
 关闭两个加速开关；`accelerated` 按设备能力尝试 CUDA Graph 和 FlashAttention。
 V5 WebSocket 使用分段音频返回，`ready.stream_mode` 为 `segments`，输出为 48 kHz。
+
+中文训练标注和参考音频转录默认使用 `FunAudioLLM/Fun-ASR-Nano-2512`，
+模型固定到修订 `272c57b82523ada6fd87095e955f8e29100979ab`，存放于
+`tools/asr/models/Fun-ASR-Nano-2512`。模型和 VAD 文件完整时直接从本地加载；
+缺失时下载固定修订。运行环境要求 FunASR >= 1.4.1，使用内置 Nano 实现。
+已有训练标注、情感参考文本和角色权重不会自动重写。
 
 真实 GPU 测试命令：
 

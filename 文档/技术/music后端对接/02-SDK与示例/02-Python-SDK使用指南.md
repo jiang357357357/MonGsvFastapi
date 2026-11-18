@@ -1,7 +1,14 @@
 # Python SDK 使用指南
 
-> 项目内置了一套完整的 Python 客户端 SDK，位于 `Code/FastApi/Api/`。
-> 支持同步/异步两种模式，类型完备（Pydantic），自带请求构建器和异常体系。
+> 核对日期：2026-10-24。历史 SDK 位于 `Code/FastApi/Api/`，其模型和部分请求编码尚未跟上当前网关。
+> 新对接的训练与合成请优先使用下文 `requests` / `websockets` 示例，字段以 [API 手册](../01-接口协议/01-API完整手册.md) 为准。
+
+## SDK 当前兼容边界
+
+- SDK 仍保留固定训练 Batch 和旧保存间隔，不能据此判断服务端默认值。工作台默认值从 `/training/workbench/defaults` 获取。
+- SDK 的无文件 POST 默认发送 JSON，当前训练、模型加载和多数底层接口要求表单；旧封装可能返回 422，不能直接当作已适配当前网关的客户端。
+- SDK 推理封装尚未转发 `seed/sample_steps/cfg_rate/inference_mode` 等完整参数；Base64 参考音频字段也不是当前统一网关的公开入参。
+- SDK 尚未封装训练工作台。本文保留的数据准备等旧 SDK 示例用于说明既有结构，未经本次调用验收；需要这些功能时按 API 手册直接发送表单。
 
 ## 安装到你的项目
 
@@ -90,98 +97,61 @@ else:
 4. 使用情感的 `music_url` / `text` / `text_language` 作为参考音频和参考文本。
 5. 调用底层推理并返回音频。
 
-### 高级流程：加载模型 -> 底层推理
+### 高级流程：表单加载模型与自定义参考音频
 
-下面是直接调用底层 `/inference/*` 的方式。只有在测试、调试或自定义参考音频时建议使用。
-
-```python
-# 1. 加载模型
-client.load_models(
-    gpt_path="GPT_weights_v2Pro/my_role.ckpt",       # GPT 权重路径
-    sovits_path="SoVITS_weights_v2Pro/my_role.pth"    # SoVITS 权重路径
-)
-
-# 2. 构建推理请求
-request = builder.inference_request(
-    text="你好，欢迎使用语音合成系统。",
-    ref_audio_path="/path/to/reference_audio.wav",
-    prompt_text="这是一段参考音频的文本内容。",
-    text_language="zh",
-    prompt_language="zh",
-    top_k=15,
-    top_p=1.0,
-    temperature=1.0,
-    sample_steps=32,
-    speed=1.0,
-    how_to_cut="按标点符号切",
-    return_base64=True  # 返回 base64 编码的音频
-)
-
-# 3. 执行推理
-response = client.inference(request)
-
-if response.success:
-    # 保存音频文件
-    AudioUtils.decode_audio_base64(response.audio_data, "output.wav")
-    print(f"音频已保存，时长：{response.duration:.2f}秒")
-    print(f"处理耗时：{response.processing_time:.2f}秒")
-else:
-    print(f"推理失败：{response.message}")
-```
-
-### 方式二：Base64 音频作为参考
-
-无需文件路径，直接传入 base64 编码的音频数据：
+模型路径和 `ref_audio_path` 指服务端文件；客户端本地参考文件请通过 `files={"ref_audio": ...}` 上传。
 
 ```python
 import base64
+import requests
 
-with open("ref.wav", "rb") as f:
-    ref_audio_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-request = builder.inference_request(
-    text="这是使用 Base64 参考音频的测试。",
-    ref_audio_base64=ref_audio_b64,
-    prompt_text="参考音频的文字。",
-    return_base64=True
+base_url = "http://localhost:40302"
+response = requests.post(
+    f"{base_url}/inference/models/load",
+    data={"gpt_path": "/models/voice.ckpt", "sovits_path": "/models/voice.pth"},
+    timeout=600,
 )
+response.raise_for_status()
+loaded = response.json()
+if not loaded.get("success"):
+    raise RuntimeError(loaded.get("message") or "模型加载失败")
 
-response = client.inference(request)
+with open("ref.wav", "rb") as reference:
+    response = requests.post(
+        f"{base_url}/inference/tts",
+        data={
+            "text": "你好，欢迎使用语音合成系统。",
+            "text_language": "zh",
+            "prompt_text": "参考音频中的准确文本。",
+            "prompt_language": "zh",
+            "seed": 2027,
+            "top_k": 15,
+            "top_p": 1.0,
+            "temperature": 1.0,
+            "pause_second": 0.3,
+            "inference_mode": "normal",
+            "return_base64": "true",
+        },
+        files={"ref_audio": ("ref.wav", reference, "audio/wav")},
+        timeout=600,
+    )
+response.raise_for_status()
+result = response.json()
+if not result.get("success"):
+    raise RuntimeError(result.get("message") or "合成失败")
+with open("output.wav", "wb") as output:
+    output.write(base64.b64decode(result["audio_data"]))
 ```
 
-或者使用内置工具：
+未传 `sample_steps/cfg_rate` 时按模型取默认：V3=32 步，V4=8 步，V5dev=32 步/CFG 1.30，V5turbo=4 步/CFG 0。可选步数为 4、8、16、32，CFG 范围 0–2。`seed=-1` 表示随机，固定种子范围为 0–4294967295。
 
-```python
-ref_audio_b64 = AudioUtils.encode_audio_file("ref.wav")
-```
+HTTP 保留合法的 `top_p=0` 和 `temperature=0`；`pause_second` 范围为 0.1–0.5 秒。`if_freeze` 当前没有冻结效果。`normal` 关闭 CUDA Graph/FlashAttention，`accelerated` 同时尝试两个开关。当前网关输出 WAV，不接受官方 `media_type` 或 Base64 参考音频字段。
 
-### 方式三：直接传参（不经过 Builder）
+### TTS WebSocket：按模型返回 Token 块或完整片段
 
-```python
-from Code.FastApi.Api import InferenceRequest, InferenceConfig
+`ready.stream_mode` 在 V1/V2/Pro 系列为 `tokens`，V3/V4/V5 为 `segments`。后者要等本段生成后才返回，V5 输出 48 kHz。当前尚未接入官方最新 `gpt_streaming`。
 
-request = InferenceRequest(
-    text="直接传参的测试。",
-    text_language="zh",
-    ref_audio_path="/path/to/ref.wav",
-    prompt_text="参考文本",
-    prompt_language="zh",
-    config=InferenceConfig(
-        top_k=15,
-        top_p=1.0,
-        temperature=1.0,
-        sample_steps=32,
-        speed=1.0,
-        how_to_cut="不切"
-    ),
-    return_base64=True
-)
-response = client.inference(request)
-```
-
-当前 HTTP SDK 调用返回完整音频，对应官方模式 0。底层模式 1 已验证可用，但尚未封装成公开 HTTP 流式接口；`/ws/tts/stream` 使用的是官方模式 2，当前 SDK 也尚未提供专用的 TTS WebSocket 客户端。
-
-### TTS WebSocket（模式 2）
+WS 不转发 `seed`，`top_p=0` 和 `temperature=0` 会被替换成 1；固定种子或零值采样请用 HTTP。WS 推理固定关闭两个加速开关。取消只停止会话输出，后台计算可能继续；客户端应清空播放缓冲。
 
 在 SDK 增加正式封装前，可以直接使用 `websockets`。`role_id` 和 `emotion` 应先通过资源接口动态获取：
 
@@ -208,7 +178,6 @@ async def stream_tts():
             "top_k": 15,
             "top_p": 1.0,
             "temperature": 1.0,
-            "sample_steps": 32,
             "pause_second": 0.3,
         }, ensure_ascii=False))
 
@@ -332,52 +301,82 @@ response = client.semantic_encoding(request)
 
 ## 训练
 
-### GPT 训练
+推荐直接对接工作台。下例使用已有角色和服务端原始音频目录；首次创建角色可改为 `role_mode="new"`。上传模式把本地文件作为重复的 `audio_files` multipart 字段发送，文件句柄需保持到请求结束。
 
 ```python
-request = builder.gpt_training_request(
-    exp_name="my_project",
-    exp_root="/output/my_project",
-    batch_size=8,
-    total_epoch=15,
-    learning_rate=0.0001
-)
-response = client.start_gpt_training(request)
-job_id = response.job_id
-print(f"GPT 训练已启动，任务 ID：{job_id}")
-
-# 轮询训练状态
+import json
 import time
-while True:
-    status = client.get_training_status(job_id)
-    print(f"进度：{status.progress}% / 状态：{status.status}")
-    if status.status in ("completed", "failed", "stopped"):
-        break
-    time.sleep(30)
-```
+import requests
 
-### SoVITS 训练
+base_url = "http://localhost:40302"
+session = requests.Session()
+# 如果服务启用了 HTTP 认证：
+# session.headers["Authorization"] = "Bearer your-api-key"
 
-```python
-request = builder.sovits_training_request(
-    exp_name="my_project",
-    exp_root="/output/my_project",
-    version="v2Pro",
-    batch_size=32,
-    total_epoch=8
+response = session.get(f"{base_url}/training/workbench/defaults", timeout=30)
+response.raise_for_status()
+print(response.json()["versions"]["v5turbo"])
+
+options = {
+    "world_name": "DemoWorld",
+    "project_name": "DemoVoice",
+    "version": "v5turbo",
+    "role_mode": "existing",
+    "training_mode": "fresh",
+    "preprocessing_mode": "full",
+    "input_audio_dir": "/data/audio/raw",
+    "language": "zh",
+    "gpu_numbers": "0",
+    "train_gpt": True,
+    "train_sovits": True,
+}
+# files 中的空文件名用于将 options 编码为 multipart 文本字段。
+response = session.post(
+    f"{base_url}/training/workbench/start",
+    files={"options": (None, json.dumps(options, ensure_ascii=False))},
+    timeout=120,
 )
-response = client.start_sovits_training(request)
+response.raise_for_status()
+workflow_id = response.json()["training_workflow"]["workflow_id"]
+
+while True:
+    response = session.get(
+        f"{base_url}/training/workbench/runs/{workflow_id}", timeout=60
+    )
+    response.raise_for_status()
+    record = response.json()
+    print(record["status"], record.get("current_target"))
+    if record["status"] in {"completed", "failed", "stopped", "interrupted"}:
+        break
+    time.sleep(5)
 ```
 
-### 异步等待训练完成
+记录跨重启保留，未结束任务会标为 `interrupted`。续训前查询 `/training/workbench/workspaces`，设置 `training_mode="resume"` 与返回的 `resume_workspace`；总轮数是累计目标，必须超过已完成轮数。
+
+GPT 默认 15 轮；普通 SoVITS 默认 8 轮，V3/V4/V5 默认 2 轮。Batch、精度按硬件选择；GPT/SoVITS 学习率分别为 0.01/0.0001。默认只在各阶段最后一轮保存权重与恢复 checkpoint，中途停止可能没有新增可恢复进度。
+
+停止、日志和试听：
 
 ```python
-# 阻塞等待，超时 1 小时，每 30 秒检查一次
-status = client.wait_for_training_completion(job_id, check_interval=30, max_wait_time=3600)
-print(f"训练完成，最终状态：{status.status}")
+response = session.get(
+    f"{base_url}/training/workbench/runs/{workflow_id}/logs",
+    params={"target": "sovits"},
+    timeout=30,
+)
+response.raise_for_status()
+print(response.json()["text"])
+
+# 需要停止仍在运行的任务时：
+# session.post(f"{base_url}/training/workbench/runs/{workflow_id}/stop", timeout=60)
+# 完成后可 POST 同一 /runs/{workflow_id}/preview，
+# JSON 为 {"text": "试听文本", "emotion": "现有情感名", "seed": 2027}。
 ```
+
+单项 `/training/gpt/start` 与 `/training/sovits/start` 仅接收基础表单字段，不接收 SDK 全部训练配置；高级字段请用工作台。V1 文本特征版本传递仍有已知限制，详见 [训练与模型](../04-训练与模型/README.md)。
 
 ## 工作流
+
+下节为旧工作流封装，预处理在 HTTP 请求内执行。新训练优先使用上文工作台；两组 `workflow_id` 的查询路径和持久化行为不同。
 
 ### 一键预处理工作流
 

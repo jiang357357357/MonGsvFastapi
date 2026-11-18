@@ -37,6 +37,7 @@ from module.models import (
     SynthesizerTrnV3 as SynthesizerTrn,
 )
 from process_ckpt import savee
+from training_metrics import EpochLoss
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = False
@@ -306,6 +307,7 @@ def train_and_evaluate(
     global global_step
 
     net_g.train()
+    epoch_loss = EpochLoss()
     # net_d.train()
     # for batch_idx, (
     #     ssl,
@@ -374,6 +376,7 @@ def train_and_evaluate(
         scaler.update()
 
         if rank == 0:
+            epoch_loss.add(loss_gen_all)
             if global_step % hps.train.log_interval == 0:
                 lr = optim_g.param_groups[0]["lr"]
                 # losses = [commit_loss,cfm_loss,mel_loss,loss_disc, loss_gen, loss_fm, loss_mel, loss_kl]
@@ -409,6 +412,8 @@ def train_and_evaluate(
             #     #     utils.clean_checkpoints(path_to_models=hps.s2_ckpt_dir, n_ckpts_to_keep=keep_ckpts, sort_by_time=True)
 
         global_step += 1
+    if rank == 0:
+        epoch_loss.write(writer, logger, epoch, global_step)
     if epoch % hps.train.save_every_epoch == 0 and rank == 0:
         if hps.train.if_save_latest == 0:
             utils.save_checkpoint(

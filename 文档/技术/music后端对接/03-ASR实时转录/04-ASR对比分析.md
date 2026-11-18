@@ -1,6 +1,7 @@
 # ASR 引擎与实时接口说明
 
 > 对接对象：MonGSV FastAPI 与 music 后端/前端。
+> 核对日期：2026-10-24。训练中文 ASR 默认已切换为 Fun-ASR-Nano-2512。
 
 ---
 
@@ -10,7 +11,7 @@ MonGSV 现在有两条 ASR 链路，使用场景不同：
 
 | 场景 | 使用链路 | 模型 | 是否带标点 | 推荐用途 |
 |------|----------|------|------------|----------|
-| 中文训练数据准备 | 离线 FunASR | `paraformer-large + fsmn-vad + ct-punc` | 是 | 中文切片的批量标注、训练前预处理 |
+| 中文训练数据准备 | 离线 FunASR | `Fun-ASR-Nano-2512 + FSMN VAD` | 是 | 中文切片的批量标注、训练前预处理 |
 | 粤语训练数据准备 | 离线 FunASR | `UniASR 2-pass Cantonese` | 依模型输出 | 粤语切片的批量标注 |
 | 其他支持语言训练 | Faster-Whisper | `large-v3 + float16` | 依模型输出 | 英语、日语、韩语等训练标注 |
 | 普通实时语音识别 | `/ws/asr/final` | VAD 断句 + final ASR | 是 | 通用实时转录 |
@@ -45,16 +46,17 @@ language = zh
 实际加载：
 
 ```text
-speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch
-+ speech_fsmn_vad_zh-cn-16k-common-pytorch
-+ punc_ct-transformer_zh-cn-common-vocab272727-pytorch
+tools/asr/models/Fun-ASR-Nano-2512
++ tools/asr/models/speech_fsmn_vad_zh-cn-16k-common-pytorch
 ```
+
+Nano 固定模型修订为 `272c57b82523ada6fd87095e955f8e29100979ab`，要求 FunASR >= 1.4.1。本地模型文件完整时直接加载，缺失时下载固定修订，使用内置模型实现（`trust_remote_code=False`）；CUDA 上按能力选择 BF16，否则使用 FP32。已有标注不会重写。
 
 训练工作流按语言自动选择引擎：
 
 | `language` | 实际引擎 |
 |------------|----------|
-| `zh` | FunASR Paraformer-large + FSMN VAD +中文标点模型 |
+| `zh` | Fun-ASR-Nano-2512 + FSMN VAD |
 | `yue` | FunASR UniASR 2-pass Cantonese |
 | `en`、`ja`、`ko` 等 | Faster-Whisper large-v3 + float16 |
 
@@ -70,7 +72,7 @@ audio_path|speaker|language|text
 
 - 适合训练标注。
 - 识别结果自带中文标点。
-- 会通过 VAD/标点模型提升完整句质量。
+- 使用 FSMN VAD；Nano 模型输出完整文本，不再把旧 ct-punc 标点模型列为中文默认必需项。
 - 失败时工作流会停止，并输出缺失项/失败原因，避免只切分完就直接进入训练。
 
 ### 当前参数边界
@@ -246,9 +248,9 @@ connection open
 
 `paraformer-zh-streaming` 是在线流式模型，推荐按固定 chunk 连续输入，并维护 cache。它更适合“边说边显示”的场景。
 
-中文训练标注需要的是稳定、完整、带标点的句子，因此使用离线 FunASR Paraformer-large 更合适。非中文训练则由工作流分流到 Faster-Whisper。
+当前中文训练使用离线 Fun-ASR-Nano-2512，粤语使用 UniASR，其他支持语言由工作流分流到 Faster-Whisper。Paraformer-large 仍保留为显式 classic 后端，不是当前默认。
 
-实测同一批切片：
+以下为旧 Paraformer 后端的历史切片记录，不是本次 Nano 对照测试：
 
 ```text
 streaming 修复前：我还个个会会会认是这你你不会我们们需要我哥道为
@@ -259,10 +261,10 @@ funasr_large：我还记得这间会议室，这是专门为特雷西亚控制�
 所以推荐：
 
 ```text
-中文训练标注：FunASR Paraformer-large
+中文训练标注：Fun-ASR-Nano-2512 + FSMN VAD
 粤语训练标注：FunASR UniASR 2-pass Cantonese
 其他支持语言训练标注：Faster-Whisper large-v3
-实时交互：paraformer-zh-streaming + final 标点恢复
+实时交互：VAD final ASR；声纹场景使用 /ws/asr/final/voiceprint
 ```
 
 ---
@@ -272,9 +274,9 @@ funasr_large：我还记得这间会议室，这是专门为特雷西亚控制�
 | 维度 | MonGSV FastAPI | funasr-back |
 |------|----------------|-------------|
 | 后端框架 | FastAPI + Uvicorn | Django + Daphne |
-| 训练 ASR | `paraformer-large + VAD + PUNC` | 无训练链路 |
+| 训练 ASR | `Fun-ASR-Nano-2512 + FSMN VAD` | 无训练链路 |
 | 实时 ASR | `/ws/asr/final`、`/ws/asr/final/voiceprint`，或 `/ws/asr/transcribe` | `ws/voice/transcribe/` |
-| 实时模型 | `paraformer-zh-streaming` | `paraformer-zh-streaming` |
+| 实时模型 | 当前 final 路径使用 Fun-ASR-Nano；保留旧 streaming 引擎类 | `paraformer-zh-streaming` |
 | 标点恢复 | final 阶段 `ct-punc` | 独立标点模型 |
 | 声纹识别 | 支持注册/识别/验证接口 | 支持 |
 | TTS 训练/推理 | 支持完整链路 | 不负责 |
@@ -287,7 +289,7 @@ music 后端/前端建议这样用：
 
 | 需求 | 调用接口 |
 |------|----------|
-| 上传音频并训练角色 | `/workflow/training/full` 或 `/workflow/complete` |
+| 上传音频并训练角色 | 推荐 `/training/workbench/start`；旧 `/workflow/training/full`、`/workflow/complete` 保留 |
 | 普通单文件转录（角色/素材音频） | `/inference/transcribe` |
 | 只接受当前用户的单文件转录 | `/inference/transcribe/voiceprint` |
 | 普通实时麦克风识别 | `/ws/asr/final` |

@@ -1,0 +1,13 @@
+.cache/
+.python-download/
+runtime/
+app/
+Tool/
+packages/
+data/
+*.exe
+*.zip
+manifest.json
+validation.json
+__pycache__/
+*.log

@@ -37,6 +37,7 @@ from module.models import (
     SynthesizerTrn,
 )
 from process_ckpt import savee
+from training_metrics import EpochLoss
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = False
@@ -337,6 +338,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
 
     net_g.train()
     net_d.train()
+    epoch_loss = EpochLoss()
     for batch_idx, data in enumerate(tqdm(train_loader)):
         if hps.model.version in {"v2Pro", "v2ProPlus"}:
             ssl, ssl_lengths, spec, spec_lengths, y, y_lengths, text, text_lengths, sv_emb = data
@@ -458,6 +460,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
         scaler.update()
 
         if rank == 0:
+            epoch_loss.add(loss_gen_all)
             if global_step % hps.train.log_interval == 0:
                 lr = optim_g.param_groups[0]["lr"]
                 losses = [loss_disc, loss_gen, loss_fm, loss_mel, kl_ssl, loss_kl]
@@ -520,6 +523,8 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
                         scalars=scalar_dict,
                     )
         global_step += 1
+    if rank == 0:
+        epoch_loss.write(writer, logger, epoch, global_step)
     if epoch % hps.train.save_every_epoch == 0 and rank == 0:
         if hps.train.if_save_latest == 0:
             utils.save_checkpoint(

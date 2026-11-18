@@ -1,6 +1,6 @@
 # TTS 流式 WebSocket
 
-状态：已实现并在远程服务 `10.8.0.4:40302` 通过端到端测试。
+核对日期：2026-10-24。协议已实现；文末远程结果是历史 V2ProPlus 测试快照，不能代表当前 V5 延迟或官方新增语义流式能力已验收。
 
 目标：支持调用方把长文本或 LLM 流式 delta 发给 GSV，GSV 后端负责缓冲、切句、排队合成，并通过同一个 WebSocket 按顺序返回音频块。
 
@@ -20,16 +20,16 @@ ws://host:40302/ws/tts/stream
 | `POST /inference/tts` | 已知模型与参考音频的完整合成 | 完整 wav/base64 |
 | `WS /ws/tts/stream` | LLM delta、长文本、实时对话 | 分段音频 chunk |
 
-当前外部能力与官方流式档位的对应关系：
+当前请求底层 `streaming_mode=true`，实际返回方式按模型区分：
 
-| 官方模式 | 当前入口 | 说明 |
-|---------:|----------|------|
-| 0 | 两个 HTTP TTS 接口 | 全部合成后一次返回 |
-| 1 | 暂无外部入口 | 底层可用；完整片段合成后分块返回 |
-| 2 | 本 WebSocket | 语义 Token 分块流式 |
-| 3 | 暂无外部入口 | 底层官方支持，当前未接入 |
+| 模型 | `ready.stream_mode` | 行为 |
+|------|---------------------|------|
+| V1/V2/V2Pro/V2ProPlus | `tokens` | 旧管线按语义 Token 分块输出 |
+| V3/V4/V5dev/V5turbo | `segments` | 底层回退为整段生成后返回；V5 为 48 kHz |
 
-因此，本接口中的“流式”目前明确指模式 2。`start` 消息尚不接受 `streaming_mode=0/1/2/3`；未知字段不会用于切换底层档位。
+两个 HTTP TTS 接口均返回完整 WAV。WS 的 `start` 不提供官方 `streaming_mode=0/1/2/3` 档位选择。
+
+当前内核基线为官方 `1b47ca0`。本次对照的官方 `b4570b8` 新增 `gpt_streaming`、声学窗口、前瞻、重叠和语义流加速，支持 V2ProPlus/V5dev/V5turbo；这些新参数尚未接入本后端，发送它们不会启用新流式路径。
 
 ## 2. 核心原则
 
@@ -37,7 +37,7 @@ ws://host:40302/ws/tts/stream
 2. 后端统一解析 `role + emotion` 到模型路径、参考音频和参考文本。
 3. 后端按标点、长度、超时把文本切成适合 TTS 的片段。
 4. 单个会话内音频输出必须按 `seq` 顺序返回。
-5. 支持取消当前合成，避免用户打断后继续播旧音频。
+5. 支持停止会话输出；客户端在打断时清空已缓存音频。后台计算取消的限制见下文。
 6. 最终音频优先返回二进制 PCM，降低延迟和编码成本。
 
 ## 3. 消息协议
@@ -60,12 +60,24 @@ ws://host:40302/ws/tts/stream
   "top_k": 15,
   "top_p": 1.0,
   "temperature": 1.0,
-  "sample_steps": 32,
   "pause_second": 0.3
 }
 ```
 
-未提供时使用上面列出的默认值。`pause_second` 已生效，并映射到底层 `fragment_interval`；显式传 `0` 表示不插入句间静音。`if_freeze` 仍是兼容保留字段，当前新推理管线不会建立冻结缓存。
+可选高级参数和当前边界：
+
+| 参数 | 默认 / 范围 | 当前行为 |
+|------|-------------|----------|
+| `sample_steps` | 4、8、16、32 | 不传时 V3=32、V4=8、V5dev=32、V5turbo=4 |
+| `cfg_rate` | 0–2 | 不传时 V5dev=1.30，其余默认 0 |
+| `pause_second` | 默认 0.3，范围 0.1–0.5 秒 | 映射为 `fragment_interval`；0 会校验失败 |
+| `top_k` | 默认 15，范围 1–100 | 0 被旧默认值逻辑替换为 15，调用方应传有效值 |
+| `top_p`、`temperature` | 默认 1，范围 0–1 | 当前传入 0 会被替换成 1；需零值时使用 HTTP |
+| `seed` | 尚未接入 | WS 不转发此字段，实际使用 -1 随机；固定种子请使用 HTTP |
+| `if_freeze` | 默认 false | 兼容保留，未实现上次语义结果冻结 |
+| 加速开关 | 固定关闭 | WS 不接收 `inference_mode`，推理时关闭 CUDA Graph 与 FlashAttention |
+
+表中标明的参数限制仍是当前实现问题，不表示代码已经修复。
 
 服务端响应：
 
@@ -74,7 +86,8 @@ ws://host:40302/ws/tts/stream
   "type": "ready",
   "request_id": "chat-001",
   "format": "pcm_s16le",
-  "channels": 1
+  "channels": 1,
+  "stream_mode": "tokens"
 }
 ```
 
@@ -132,7 +145,7 @@ LLM 每吐出一段文本，调用方就发送一次。
 
 ### 3.6 cancel
 
-取消当前请求，停止后续合成和输出。
+请求停止当前会话的异步消费与后续输出。客户端收到响应后还需清空播放缓冲。
 
 ```json
 {
@@ -149,6 +162,8 @@ LLM 每吐出一段文本，调用方就发送一次。
   "request_id": "chat-001"
 }
 ```
+
+当前取消会取消异步 worker，后台推理线程没有同步停止信号，可能继续占用 GPU。`finish` 会在接收循环内等待输出完成，期间新的 `cancel` 消息也可能要等它完成后才被读取。不要依赖 `cancelled` 判断 GPU 已空闲或立即切换模型。
 
 ## 4. 音频返回协议
 
@@ -261,12 +276,14 @@ def stream_inference(self, request: InferenceRequest):
     inputs["return_fragment"] = False
     inputs["parallel_infer"] = False
     inputs["split_bucket"] = False
+    inputs["use_cuda_graph"] = False
+    inputs["use_flash_attention"] = False
 
     for sample_rate, audio in self.tts_pipeline.run(inputs):
         yield sample_rate, audio
 ```
 
-这组固定设置对应官方模式 2。WebSocket 外层的 `TextSegmenter` 负责处理 LLM delta 和句子级排队，底层模式 2 则负责在单个文本片段内部继续按语义 Token 产出音频块。
+WebSocket 外层的 `TextSegmenter` 处理 LLM delta 和片段排队。旧 Token 流式适用于 V1/V2/Pro 系列；V3/V4/V5 的底层 `use_vocoder` 分支会关闭流式并打开分段返回。不能仅根据输入中 `streaming_mode=true` 推断模型在段内持续产出音频。
 
 WebSocket consumer 负责把 `float32/int16 ndarray` 转成 `pcm_s16le bytes` 后发送。
 
@@ -294,24 +311,16 @@ text_delta -> segment_queue -> tts_worker -> audio output
 
 默认一个会话只跑一个 `tts_worker`，保证音频顺序自然。
 
-多会话并发由服务层限制：
+当前实际限制：
 
-| 限制 | 建议 |
+| 项目 | 行为 |
 |------|------|
-| 单 GPU 同时 TTS worker | 1-2 |
-| 单连接待合成片段队列 | 最多 16 |
-| 单片段最大文本长度 | 120 字 |
-| 单请求最长文本 | 4000 字 |
+| 单连接片段队列 | `asyncio.Queue(maxsize=16)`；满时等待入队 |
+| 单连接推理 | 一个异步 worker，按 `seq` 串行消费 |
+| 多连接 / HTTP 与 WS | 共用推理实例，没有全局模型互斥与 GPU worker 配额 |
+| 文本总长度 | 当前未实现 4000 字硬限制；切句长度是启发式，不能视为请求校验 |
 
-队列满时返回：
-
-```json
-{
-  "type": "error",
-  "code": "queue_full",
-  "message": "TTS 队列已满，请稍后发送"
-}
-```
+当前不会返回专门的 `queue_full` 事件，也没有已生效的“单 GPU 最多 1–2 worker”限额。调用方应限制输入、消费播放队列，并串行协调模型切换与合成。普通 HTTP 推理还会同步占用事件循环。
 
 ## 9. 客户端播放
 
@@ -338,7 +347,7 @@ Node/Python 客户端可以直接送播放器或写入 PCM/WAV。
 5. 单连接串行合成
 6. 日志打印 `seq/text/audio_bytes/sample_rate`
 
-## 11. 已验证结果
+## 11. 历史验证结果
 
 远程服务：
 
@@ -399,7 +408,7 @@ end
 | 总耗时 | 3.677 秒 | 3.733 秒 |
 | 音频时长 | 39.50 秒 | 39.54 秒 |
 
-该结果用于证明底层模式 1 可用，不表示当前 WebSocket 已经切换到模式 1。当前 WebSocket 仍固定使用模式 2。
+该结果仅为当时 V2ProPlus 底层模式 0/1 的记录，不是当前 V5 性能测试，也不是官方 `gpt_streaming` 的测试。当前 WS 的实际返回方式以 `ready.stream_mode` 和所加载版本为准。
 
 暂不做：
 
@@ -417,5 +426,6 @@ end
 - `priority` 和 `interrupt`，支持抢占当前合成。
 - `audio_format=wav_chunk/pcm_s16le/base64_pcm`。
 - `latency_profile=fast/balanced/quality`。
-- 服务端缓存最近的参考音频特征。
+- 接入官方最新语义流式内核、窗口参数及匹配的加速后端。
+- 补齐全局模型互斥、后台线程取消和 WS 采样参数传递。
 - 统计首包延迟、片段合成耗时、总音频时长。

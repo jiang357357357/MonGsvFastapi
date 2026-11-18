@@ -2,6 +2,7 @@
 
 > 所有示例基于 `http://localhost:40302`，替换为你的实际服务地址即可。
 > 适用于 Java、Go、Node.js 等非 Python 项目对接参考。
+> 核对日期：2026-10-24。高级字段与当前限制见 [API 手册](../01-接口协议/01-API完整手册.md)。
 
 ---
 
@@ -65,6 +66,8 @@ curl -s "http://localhost:40302/services/status" | python -m json.tool
 ---
 
 ## 2. TTS 推理完整流程
+
+HTTP 的 `sample_steps/cfg_rate` 可省略：V3=32 步、V4=8 步、V5dev=32 步/CFG 1.30、V5turbo=4 步/CFG 0。可选步数为 4、8、16、32，CFG 范围 0–2。HTTP 支持 `seed=-1` 随机或 0–4294967295 固定种子，`pause_second` 为 0.1–0.5 秒。`if_freeze` 当前没有冻结效果，输出为 WAV；尚未开放官方 `gpt_streaming/media_type`。
 
 ### 推荐流程：按角色 + 情感合成
 
@@ -151,7 +154,7 @@ curl -X POST "http://localhost:40302/inference/tts" \
   -F "top_p=1.0" \
   -F "temperature=1.0" \
   -F "speed=1.0" \
-  -F "sample_steps=32" \
+  -F "seed=2027" \
   -F "inference_mode=normal" \
   -F "return_base64=true" \
   -o tts_response.json
@@ -277,7 +280,7 @@ curl -X POST "http://localhost:40302/inference/transcribe/models/load" \
   -F "language=zh"
 ```
 
-该接口当前创建统一 ASR 引擎并登记驻留状态；Paraformer/Whisper 的大模型权重仍在第一次识别时延迟加载。`model_size`、`precision` 当前参与配置校验和驻留键，但底层 Faster-Whisper 批量识别仍固定使用 `large-v3 + float16 + beam_size=5 + VAD`。
+该接口当前创建统一 ASR 引擎并登记驻留状态；Fun-ASR-Nano/Whisper 的大模型权重仍在第一次识别时延迟加载。`model_size`、`precision` 当前参与配置校验和驻留键，但底层 Faster-Whisper 批量识别仍固定使用 `large-v3 + float16 + beam_size=5 + VAD`。
 
 ---
 
@@ -332,6 +335,26 @@ curl -X POST "http://localhost:40302/dataset/semantic/encode" \
 
 ## 6. 模型训练
 
+### 推荐：训练工作台
+
+支持八个版本，Batch 与精度按硬件计算；GPT 默认 15 轮，普通 SoVITS 8 轮、V3/V4/V5 2 轮，保存间隔固定为最后一轮。角色名与服务端路径请替换；新角色用 `role_mode=new`，已有角色用 `existing`。
+
+```bash
+curl -s "http://localhost:40302/training/workbench/defaults" | python -m json.tool
+
+curl -X POST "http://localhost:40302/training/workbench/start" \
+  --form-string 'options={"world_name":"DemoWorld","project_name":"DemoVoice","version":"v5turbo","role_mode":"new","training_mode":"fresh","preprocessing_mode":"full","input_audio_dir":"/data/audio/raw","gpu_numbers":"0","train_gpt":true,"train_sovits":true}'
+
+# 使用启动结果中 training_workflow.workflow_id 替换 ID：
+curl -s "http://localhost:40302/training/workbench/runs/REPLACE_WORKFLOW_ID"
+curl -s "http://localhost:40302/training/workbench/runs/REPLACE_WORKFLOW_ID/logs?target=sovits"
+curl -X POST "http://localhost:40302/training/workbench/runs/REPLACE_WORKFLOW_ID/stop"
+```
+
+上传音频时删除 `input_audio_dir`，添加一个或多个 `-F "audio_files=@/本地路径/音频.wav"`。工作台历史跨重启保存，重启时未结束记录标为 `interrupted`；停止新任务可能尚无 checkpoint。续训与全部 `options` 字段见 [训练与模型](../04-训练与模型/README.md)。
+
+下面的单项接口只接收基础表单字段，不接收学习率、LoRA rank 等高级选项。
+
 ### 启动 GPT 训练
 
 ```bash
@@ -349,8 +372,12 @@ curl -X POST "http://localhost:40302/training/gpt/start" \
   "success": true,
   "message": "GPT训练已启动",
   "job_id": "gpt_20260522_123456",
-  "exp_name": "my_project",
-  "status": "running",
+  "status": {
+    "job_id": "gpt_20260522_123456",
+    "status": "running",
+    "current_epoch": 0,
+    "total_epochs": 15
+  },
   "config_file": "/data/output/my_project/config.yaml"
 }
 ```
@@ -396,6 +423,8 @@ curl -X POST "http://localhost:40302/training/stop/gpt_20260522_123456"
 ---
 
 ## 7. 工作流（一键式）
+
+本节为旧工作流，预处理在 HTTP 请求内执行，记录只在内存中。工作台任务使用 `/training/workbench/runs/{id}` 查询，不能与本节状态接口混用。
 
 ### 完整预处理工作流（不含训练）
 
@@ -685,7 +714,7 @@ async function textToSpeech(text, refAudioBlob, promptText) {
   formData.append('top_k', '15');
   formData.append('top_p', '1.0');
   formData.append('temperature', '1.0');
-  formData.append('sample_steps', '32');
+  formData.append('seed', '2027');
   formData.append('speed', '1.0');
   formData.append('return_base64', 'true');
 
@@ -723,7 +752,7 @@ async function main() {
 }
 ```
 
-### TTS 流式 WebSocket（模式 2）
+### TTS 流式 WebSocket（按模型选择返回方式）
 
 浏览器收到的是 `pcm_s16le / mono` 裸 PCM，不是可直接交给 `<audio>` 的 WAV 文件。下面示例展示协议收发；`enqueuePcmChunk` 应由调用方接入 AudioContext 播放队列。
 
@@ -746,7 +775,6 @@ function startStreamingTTS({ roleId, emotion, text, enqueuePcmChunk }) {
       top_k: 15,
       top_p: 1.0,
       temperature: 1.0,
-      sample_steps: 32,
       pause_second: 0.3,
     }));
   });
@@ -784,7 +812,7 @@ function startStreamingTTS({ roleId, emotion, text, enqueuePcmChunk }) {
 }
 ```
 
-当前 WebSocket 固定对应官方模式 2。模式 1 虽然已在底层验证，但尚无公开 HTTP 流式入口。
+当前 `ready.stream_mode` 对 V1/V2/Pro 系列返回 `tokens`，对 V3/V4/V5 返回 `segments`。V5 为 48 kHz，以每段 `audio_start.sample_rate` 为准。WS 不传递 `seed`，零值 `top_p/temperature` 会变为 1，固定关闭 CUDA Graph/FlashAttention；需固定种子或零值时使用 HTTP。取消后客户端应清空播放缓冲，后台推理线程可能继续运行。官方最新 `gpt_streaming` 尚未接入。
 
 ### ASR 转录
 

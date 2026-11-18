@@ -1,5 +1,7 @@
 # MonGSV API 对接文档
 
+> 历史服务文档：本文的端口 7020、`Code/GsvBack`、`/api/music/*` 等属于旧网关，不适用于当前 FastAPI 路由。新接入请使用 [music 后端对接](../music后端对接/README.md)，以默认端口 40302 的 API 手册和训练工作台为准。核对日期：2026-10-24。
+
 ## 概述
 
 MonGSV 提供 HTTP REST API 接口，支持跨域调用，可被其他项目直接集成使用。

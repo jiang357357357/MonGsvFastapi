@@ -52,6 +52,7 @@ Data/Media/
 Data/Static/
 Data/speaker_db/
 TEMP/
+Temp/WinBuild/
 test/
 *.log
 *.tmp

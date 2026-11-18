@@ -1,5 +1,7 @@
 # GPT-SoVITS 数据准备与训练完整流程
 
+> 本文为脚本/WebUI 流程参考，界面按钮、保存间隔和示例目录不能直接视为当前 FastAPI 契约。当前八版本支持、最终轮次保存、工作台目录和 V1 文本处理限制见 [训练与模型](../music后端对接/04-训练与模型/README.md)。核对日期：2026-10-24。
+
 ## 概览
 
 ```
@@ -71,7 +73,8 @@
 
 | 模型 | 语言 | 精度 |
 |------|------|------|
-| 达摩 ASR | 中文、粤语 | float32 |
+| Fun-ASR-Nano-2512 + FSMN VAD | 中文默认，固定修订，优先本地加载 | 按设备 BF16 / FP32 |
+| FunASR UniASR | 粤语默认 | float32 |
 | Faster Whisper | 多语种 | float16 / int8 |
 
 **输出格式**（`.list` 文件）：
@@ -216,7 +219,7 @@ if not os.path.exists(path_semantic) or os.path.getsize(path_semantic) < 31:
 
 **脚本**：
 - v1/v2/v2Pro/v2ProPlus：`GPT_SoVITS/s2_train.py`
-- v3/v4：`GPT_SoVITS/s2_train_v3_lora.py`（LoRA 微调）
+- v3/v4/v5dev/v5turbo：`GPT_SoVITS/s2_train_v3_lora.py`（LoRA 微调）
 
 **配置文件**：
 - v1/v2：`GPT_SoVITS/configs/s2.json`
@@ -225,13 +228,13 @@ if not os.path.exists(path_semantic) or os.path.getsize(path_semantic) < 31:
 
 **关键参数**：
 
-| 参数 | v1/v2 默认 | v3/v4 默认 | 说明 |
+| 参数 | 普通版本官方 WebUI 默认 | V3/V4/V5 官方 WebUI 默认 | 说明 |
 |------|-----------|-----------|------|
 | batch_size | `显存(GB) // 2` | `显存(GB) // 8` | 每张卡的批大小 |
 | total_epoch | 8 | 2 | 总训练轮数 |
-| save_every_epoch | 4 | 1 | 保存频率 |
+| save_every_epoch | 4 | 1 | 官方保存频率；当前 FastAPI 强制等于总轮数 |
 | text_low_lr_rate | 0.4 | - | 文本模块学习率权重（v1/v2专用） |
-| lora_rank | - | 32 | LoRA 秩（v3/v4专用） |
+| lora_rank | - | 32 | LoRA 秩（V3/V4/V5） |
 
 **输出**：`SoVITS_weights/{version}/` 目录下的 `.pth` 权重文件
 
@@ -251,7 +254,7 @@ if not os.path.exists(path_semantic) or os.path.getsize(path_semantic) < 31:
 |------|--------|------|
 | batch_size | `显存(GB) // 2` | 每张卡的批大小 |
 | total_epoch | 15 | 总训练轮数 |
-| save_every_epoch | 5 | 保存频率 |
+| save_every_epoch | 5 | 官方保存频率；当前 FastAPI 强制等于总轮数 |
 | if_dpo | False | 是否开启 DPO 训练（实验性） |
 
 **训练数据来源**：
@@ -294,6 +297,8 @@ _CUDA_VISIBLE_DEVICES → GPU 编号
 | v2ProPlus | 全量微调 | ✅ ERes2Net | 最高精度 |
 | v3 | LoRA 微调 | 无 | 显存不足时 |
 | v4 | LoRA 微调 | 无 | 显存不足时 |
+| v5dev | LoRA 微调 | 无 | V5 Dev，推理默认 32 步 / CFG 1.30 |
+| v5turbo | LoRA 微调 | 无 | V5 Turbo，推理默认 4 步 / CFG 0 |
 
 ---
 
